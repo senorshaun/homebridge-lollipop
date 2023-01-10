@@ -1,0 +1,92 @@
+{
+  "pluginAlias": "Lollipop",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "lollipops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string",
+            "placeholder": "Lollipop",
+            "required": true
+          },
+          "ip": {
+            "title": "IP Address",
+            "type": "string",
+            "placeholder": "0.0.0.0",
+            "description": "You should make sure you have set a DHCP reservation so this IP address doesn't change.",
+            "required": true
+          },
+          "unbridge": {
+            "title": "Configure camera as an unbridged accessory",
+            "description": "This is recommended if you aren't running the plugin as a child bridge and you don't have HKSV enabled.",
+            "type": "boolean"
+          },
+          "hksv" : {
+            "title": "Enable HomeKit Secure Video Recording",
+            "type": "boolean",
+            "description": "This will add an additional Motion Sensor to the camera that is triggered any time any of the other enabled sensors are triggered. This is what HomeKit will use to record events, so long as you have a home hub and supported iCloud plan. Additionally, this enables a prebuffer to greatly increases responsiveness.",
+            "default": true
+          },
+          "enableSoundMachine": {
+            "title": "Expose a switch in HomeKit to play/pause the built in sound machine.",
+            "type": "boolean",
+            "default": true
+          },
+          "contactSensors": {
+            "title": "Configure the sensors as Contact Sensors rather than Motion Sensors.",
+            "type": "boolean"
+          },
+          "movementSensitivity": {
+            "title": "Movement Sensitivity Level",
+            "description": "Select the level of movement sensitivity to trigger the movement sensor attached to the HomeKit camera.",
+            "type": "integer",
+            "oneOf": [
+                {
+                  "enum": [0],
+                  "title": "Disabled"
+                },
+                {
+                  "enum": [10],
+                  "title": "Low"
+                },
+                {
+                  "enum": [5],
+                  "title": "Medium"
+                },
+                {
+                  "enum": [2],
+                  "title": "High"
+                }
+              ],
+            "default": 10,
+            "required": true
+          },
+          "enableCryingDetectionSensor": {
+            "title": "Expose a sensor for crying detection notifications.",
+            "description": "Crying Detection must be configured in the Lollipop app for this to trigger.",
+            "type": "boolean"
+          },
+          "enableCrossingDetectionSensor": {
+            "title": "Expose a sensor for barrier crossing detection notifications",
+            "description": "Crossing Detection must be configured in the Lollipop app for this to trigger.",
+            "type": "boolean"
+          },
+          "enableNoiseSensor": {
+            "title": "Expose a sensor for unacceptable noise detection notifications.",
+            "description": "Noise must be configured in the Lollipop app for this to trigger.",
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "debug": {
+      "title": "Enable debug logging",
+      "type": "boolean"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "displayName": "Homebridge Lollipop",
+  "name": "homebridge-lollipop",
+  "version": "0.0.1-beta.4",
+  "description": "Homebridge Plugin Providing Lollipop Baby Camera Support",
+  "main": "index.js",
+  "license": "MIT",
+  "keywords": [
+    "homebridge-plugin",
+    "homebridge",
+    "camera",
+    "baby camera",
+    "baby",
+    "lollipop"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/senorshaun/homebridge-lollipop.git"
+  },
+  "bugs": {
+    "url": "http://github.com/senorshaun/homebridge-lollipop/issues"
+  },
+  "engines": {
+    "node": ">=14",
+    "homebridge": ">=1.4.0"
+  },
+  "dependencies": {
+    "ffmpeg-for-homebridge": "^0.1.4",
+    "mqtt": "^4.2.8",
+    "pick-port": "^1.0.0"
+  }
+}

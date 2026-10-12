@@ -14,9 +14,41 @@ SHA-1 `80d11522e6ddf968301a2a8c4744e8fbcfbaf33d`. No vendor account, camera, or
 credential endpoint was contacted during this investigation. Current API
 responses and physical-camera acceptance remain unverified.
 
-The plugin's authenticated RTSP mode does not yet perform this cloud provisioning
-or open authenticated MQTT. This document records the missing protocol so that
-implementation does not depend on guessing passwords or certificate roles.
+The draft now implements account sign-in, camera discovery, this credential
+provisioning flow, authenticated local MQTT, and the sound-machine switch. The
+manual RTSP-only modes remain available without an account. Implementation and
+local fixtures do not establish current vendor or physical-camera acceptance.
+
+## Account sign-in and camera discovery
+
+The Android 4.5.2 account flow uses the same API base and application ID shown
+below. It supplies `X-Requested-With: android` and a generated, stable UUID in
+`X-Parse-Installation-Id`.
+
+| Operation | Request | Successful response |
+| --- | --- | --- |
+| Sign in | `POST /functions/loginV2`, JSON `username`, `password`, `deviceType: "android"` | `result.sessionToken`, or a numeric `result.timestamp` indicating email verification. |
+| Verify email code | `POST /functions/userFinishLoginOTP`, JSON `username`, the original `timestamp`, six-digit string `otpCode`, `deviceType: "android"` | `result.sessionToken`. |
+| Validate stored session | `GET /users/me`, with `X-Parse-Session-Token` | Current user object. |
+| Discover cameras | `GET /classes/camera?include=cam_setting`, with session header | `results`, containing camera records. The plugin adds stable ordering and pagination. |
+
+The camera record's `objectId` is the raw camera/pairing ID; `name` is its display
+name. Despite its name, the cloud `internal_live_url` field maps to
+`internalLiveIp` in the Android camera model and normally contains a bare local
+IP address or hostname. The app constructs its authenticated RTSP URL from that
+address and the object ID. The plugin also accepts a complete RTSP URL in this
+field, preserving its opaque path/query when present.
+
+The Homebridge account screen supports the email-code challenge, then saves only
+the account email in configuration. The session and verified client identity
+are kept in a private per-account store. A UI sign-in and running bridge can
+share the store without an older response overwriting the new session.
+
+Camera metadata refreshes every five minutes. Identities are refreshed after
+twelve hours or when rejected, and checked for validity before each connection.
+Network/5xx failures can reuse previously authenticated metadata and still-valid
+cached identities for at most seven days. Invalid sessions clear their saved
+state. Access denial and TLS verification errors never use this outage fallback.
 
 ## Complete sequence
 
@@ -129,12 +161,55 @@ The Android app uses `SSLContext.getInstance("TLSv1.2")`, supplying both
 password and contains an actual parsed private key; no private key is derived
 from a public certificate.
 
-The downloaded identity's subject, issuer, expiry, key type, whether it is unique
-to one camera/account, and the server's exact hostname-verification requirements
-cannot be established from the request and parsing code alone. Those details
-must be checked with an authorized response and the target camera before
-finalizing Node TLS options. The old wildcard certificate's expiration is not
-by itself the diagnosis of the historical failure.
+Both inspected Paho libraries default to no hostname verifier, and the app never
+sets one. Their SSL network module starts the TLS handshake and invokes a
+hostname verifier only when configured. The implementation therefore mirrors
+the app's CA trust for a camera reached by local IP: `rejectUnauthorized: true`,
+the bundled private CA only, TLS 1.2 or newer, and a deliberate IP/hostname-check
+exception. This trusts membership in Lollipop's private PKI; it does not bind
+the certificate to a particular camera ID. MQTT password authentication and
+exact incoming topic-ID checks provide the corresponding camera selection.
+
+The helper never falls back to public roots or `rejectUnauthorized: false` in
+account mode. It checks PEM parsing, certificate/key matching, and certificate
+validity dates before connection. Tests with a different injected CA retain
+ordinary Node hostname verification. The downloaded identity's actual issuer,
+key type, per-camera/account uniqueness, and current camera certificate behavior
+still require an authorized response and hardware. The old wildcard
+certificate's expiration is not by itself the historical diagnosis.
+
+## Sound-machine control
+
+The app subscribes to both `cameraId/musicStatus/return` and
+`cameraId/controlMusic/return`. Requests use JSON `id: 0`:
+
+```json
+{"method":"musicStatus","id":0}
+```
+
+```json
+{"method":"controlMusic","params":{"playStatus":"play","repeatStatus":"one","countdownTimer":86400},"id":0}
+```
+
+The off action sends `playStatus: "pause"`. The camera reports `play`, `pause`,
+or `stop`; the latter two map to an off switch. Countdown values are seconds.
+A control response with `result.status === 1` indicates success. The app parser
+accepts a JSON object surrounded by an event envelope, so the plugin handles
+both a raw object and the previously observed framed responses.
+
+The plugin waits for MQTT CONNECT acceptance and successful subscriptions
+before enabling commands. It queries sound status after every subscription or
+reconnect, and after a command. HomeKit receives success only when the returned
+playback state matches the requested state. Failures or an eight-second deadline
+settle the request once. Concurrent switch requests are rejected while one is
+pending, and replies for a different camera ID are ignored.
+
+The app uses Paho's default QoS 1 for outgoing publishes, with retention off.
+This implementation deliberately uses QoS 0 and `queueQoSZero: false` for
+interactive switch commands so a failed request cannot be replayed after a
+reconnect. Positive camera-state confirmation supplies the user-facing success
+condition. This trades automatic MQTT retransmission for bounded interactive
+behavior; local integration tests cover dropped confirmation and reconnects.
 
 ## Why the old failure could be silent
 
@@ -163,9 +238,10 @@ listeners need to follow each replacement.
 The draft now observes both MQTT client errors and underlying TLS stream errors,
 including replacement streams after reconnects. It reports the stage, error
 code, and a fixed explanation without printing raw errors or credentials.
-Discovery stops promptly on a TLS/MQTT failure, connection closure, or denied
-SUBACK and clears its existing 15-second deadline. This diagnostic repair does
-not implement the cloud provisioning flow described above.
+Legacy ID discovery stops promptly on a TLS/MQTT failure, connection closure,
+or denied SUBACK and clears its fifteen-second deadline. Account-mode status
+connections retry rejected subscriptions and refresh rejected credentials at a
+bounded rate, without marking the sound switch ready prematurely.
 
 These controlled tests establish client behavior and the diagnostic failure.
 They do not establish that any simulated broker reproduces the actual camera's
@@ -188,9 +264,19 @@ Relevant 3.11.11 classes, with original names recovered from Kotlin metadata:
 | `r1.i` | `ParsePrimaryService.kt` | Endpoint, API base URL, and session headers. |
 | `com.aoitek.lollipop.utils.v` | `SecurityUtils.kt` | MD5 formatting and construction of the fixed string. |
 
+Additional 4.5.2 sources retained in the static analysis workspace are
+`Camera.java` (the `internalLiveIp` mapping), `LoginV2PostBody.java`,
+`LoginV2Response.java`, `FinishLoginV2PostBody.java`,
+`FinishLoginV2Response.java`, and interceptor `e3.k`. The bundled
+`MqttConnectOptions` and `SSLNetworkModule` establish the hostname-verifier
+behavior in both app versions. The 2023 `MusicStatus`,
+`MusicControllerViewModel`, `MusicControls`, and `MusicCountdown` classes
+establish the playback states, pause/resume actions, and countdown units.
+
 External references:
 
 - [APK version inventory](https://lollipop-smart-baby-monitor.apk.gold/).
+- [Independent account SDK camera query](https://github.com/altyaper/lollipop-camera-sdk/blob/main/src/client.ts).
 - [MQTT.js 4.2.8 TLS adapter](https://github.com/mqttjs/MQTT.js/blob/v4.2.8/lib/connect/tls.js).
 - [MQTT.js 4.2.8 client](https://github.com/mqttjs/MQTT.js/blob/v4.2.8/lib/client.js).
 - [Original firmware issue and author's 2023 observations](https://github.com/senorshaun/homebridge-lollipop/issues/1).

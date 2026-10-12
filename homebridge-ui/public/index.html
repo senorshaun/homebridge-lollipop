@@ -1,0 +1,63 @@
+<style>
+  .lollipop-setup { max-width: 680px; margin: 0 auto; }
+  .lollipop-setup .setup-description { line-height: 1.55; }
+  .lollipop-setup .setup-actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+  .lollipop-setup .setup-section { margin-bottom: 1.3rem; }
+  .lollipop-setup .setup-field { margin-bottom: 1rem; }
+  .lollipop-setup .setup-note { display: block; margin-top: .4rem; }
+  .lollipop-setup #camera-list { padding-left: 1.3rem; margin-bottom: .7rem; }
+  .lollipop-setup [hidden] { display: none !important; }
+</style>
+
+<div class="lollipop-setup">
+  <div class="setup-section">
+    <h3>Lollipop account</h3>
+    <p class="setup-description">Sign in to discover your cameras and connect their video and sound-machine switches. Homebridge and the cameras need access to the same local network.</p>
+    <small class="text-muted">Your password is used to sign in. Homebridge keeps the resulting session in its private storage.</small>
+  </div>
+
+  <div id="setup-message" class="alert" role="status" aria-live="polite" hidden></div>
+
+  <div id="account-connected" class="setup-section" hidden>
+    <h5 id="connected-heading">Account connected</h5>
+    <p id="camera-summary"></p>
+    <ul id="camera-list"></ul>
+    <div class="setup-actions">
+      <button id="save-account" type="button" class="btn btn-primary" hidden>Retry saving account</button>
+      <button id="refresh-cameras" type="button" class="btn btn-outline-primary">Refresh cameras</button>
+      <button id="sign-in-again" type="button" class="btn btn-link">Sign in again</button>
+    </div>
+  </div>
+
+  <form id="login-form" class="setup-section">
+    <div class="setup-field">
+      <label for="account-email">Email address</label>
+      <input id="account-email" class="form-control" type="email" autocomplete="username" maxlength="254" required>
+    </div>
+    <div class="setup-field">
+      <label for="account-password">Password</label>
+      <input id="account-password" class="form-control" type="password" autocomplete="current-password" maxlength="4096" required>
+    </div>
+    <button id="login-button" class="btn btn-primary" type="submit">Sign in</button>
+  </form>
+
+  <form id="otp-form" class="setup-section" hidden>
+    <p>Enter the six-digit verification code from Lollipop's email. If it has expired, sign in again to request a new code.</p>
+    <div class="setup-field">
+      <label for="account-code">Verification code</label>
+      <input id="account-code" class="form-control" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+    </div>
+    <div class="setup-actions">
+      <button id="verify-button" class="btn btn-primary" type="submit">Verify and connect</button>
+      <button id="cancel-otp" class="btn btn-link" type="button">Sign in again</button>
+    </div>
+  </form>
+
+  <div class="setup-section">
+    <button id="advanced-settings" class="btn btn-link px-0" type="button">Camera preferences and advanced settings</button>
+    <small class="setup-note text-muted">Adjust sound controls, camera names, and sensor options below. HomeKit Secure Video remains unavailable with account setup.</small>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="setup.js"></script>

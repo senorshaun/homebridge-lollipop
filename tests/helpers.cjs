@@ -9,10 +9,10 @@ const { EventEmitter } = require('node:events');
 
 // Exercise the repository's JavaScript directly. Only external process, network,
 // and HomeKit boundaries are mocked; no dependency installation is necessary.
-function createEnvironment() {
+function createEnvironment(options = {}) {
   const state = {
     mqtt: [], controllers: [], spawns: [], logs: [], timers: new Map(),
-    registered: [], unregistered: [], published: [], soundMachines: [], recordingDelegates: [],
+    registered: [], unregistered: [], published: [], updated: [], soundMachines: [], recordingDelegates: [],
   };
   let timerId = 0;
   const timers = {
@@ -42,7 +42,14 @@ function createEnvironment() {
       return this;
     }
     getCharacteristic(characteristic) {
-      return { value: this.characteristics.get(characteristic) };
+      this.characteristicEvents = this.characteristicEvents || new Map();
+      if (!this.characteristicEvents.has(characteristic)) {
+        const event = new EventEmitter();
+        Object.defineProperty(event, 'value', { get: () => this.characteristics.get(characteristic) });
+        event.updateValue = value => { this.characteristics.set(characteristic, value); return event; };
+        this.characteristicEvents.set(characteristic, event);
+      }
+      return this.characteristicEvents.get(characteristic);
     }
   }
 
@@ -51,7 +58,7 @@ function createEnvironment() {
   ].map(name => [name, class ServiceType {}]));
   const Characteristic = Object.fromEntries([
     'Manufacturer', 'Model', 'SerialNumber', 'FirmwareRevision',
-    'MotionDetected', 'ContactSensorState',
+    'MotionDetected', 'ContactSensorState', 'On', 'ConfiguredName',
   ].map(name => [name, name]));
   const generateUUID = name => 'test-uuid:' + name;
 
@@ -60,6 +67,7 @@ function createEnvironment() {
       super();
       this.displayName = displayName;
       this.UUID = uuid;
+      this.context = {};
       this.services = [new TestService(Service.AccessoryInformation, 'AccessoryInformation')];
       this.controllers = [];
     }
@@ -93,20 +101,30 @@ function createEnvironment() {
   api.registerPlatformAccessories = (...args) => state.registered.push(args);
   api.unregisterPlatformAccessories = (...args) => state.unregistered.push(args);
   api.publishExternalAccessories = (...args) => state.published.push(args);
+  api.updatePlatformAccessories = (...args) => state.updated.push(args);
+  api.user = { storagePath: () => '/synthetic-homebridge-storage' };
 
   const mqtt = {
     connect(url, options) {
       const client = new EventEmitter();
       Object.assign(client, {
-        url, options, subscriptions: [], unsubscriptions: [], endCalls: 0,
+        url, options, subscriptions: [], unsubscriptions: [], publications: [], endCalls: 0, connected: false,
         subscribe(topics, callback) {
           this.subscriptions.push(topics);
-          if (callback) callback(null, []);
+          if (callback) callback(null, (Array.isArray(topics) ? topics : [topics]).map(topic => ({ topic, qos: 0 })));
           return this;
         },
         unsubscribe(topics) { this.unsubscriptions.push(topics); return this; },
-        end() { this.endCalls++; return this; },
+        publish(topic, payload, options, callback) {
+          this.publications.push({ topic, payload, options });
+          if (callback) callback(null);
+          return this;
+        },
+        end() { this.endCalls++; this.connected = false; return this; },
       });
+      client.on('connect', () => { client.connected = true; });
+      client.on('close', () => { client.connected = false; });
+      client.on('offline', () => { client.connected = false; });
       state.mqtt.push(client);
       return client;
     },
@@ -134,14 +152,16 @@ function createEnvironment() {
     const module = { exports: {} };
     cache.set(filename, module);
     const requireFromModule = name => {
-      if (name === 'mqtt') return mqtt;
+      if (name === 'mqtt') return options.mqtt || mqtt;
       if (name === 'child_process' || name === 'node:child_process') return childProcess;
       if (name === 'dgram' || name === 'node:dgram') {
         return { createSocket() { throw new Error('Unexpected real-time UDP request'); } };
       }
       if (name === 'ffmpeg-for-homebridge') return 'mock-ffmpeg';
       if (name === 'pick-port') return async () => { throw new Error('Unexpected port request'); };
-      if (name === './soundmachine') {
+      if (name.endsWith('/lollipopAccount') && options.Account) return { LollipopAccount: options.Account };
+      if (name.endsWith('/mqttAuth') && options.mqttAuth) return options.mqttAuth;
+      if (name === './soundmachine' && !options.realSoundMachine) {
         return class SoundMachine { constructor(...args) { state.soundMachines.push(args); } };
       }
       if (name === './recordingDelegate') {
@@ -188,7 +208,7 @@ function createEnvironment() {
       config = { name: 'Synthetic camera', hksv: false, ...config };
       const accessory = options.accessory || new TestAccessory(config.name);
       const accessories = options.accessories || {};
-      const lollipop = new Lollipop(log, config, accessory, api, accessories);
+      const lollipop = new Lollipop(log, config, accessory, api, accessories, options.accountConnection);
       return { lollipop, accessory, config: lollipop.config, suppliedConfig: config };
     },
     runTimer(handle) {

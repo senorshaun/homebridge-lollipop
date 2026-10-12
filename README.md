@@ -1,17 +1,112 @@
 # homebridge-lollipop
- 
-[Homebridge](https://homebridge.io) Plugin Providing [Lollipop Baby Camera](https://www.lollipop.camera) Support
+
+A [Homebridge](https://homebridge.io) plugin for [Lollipop baby cameras](https://www.lollipop.camera), with local video, snapshots, camera-event sensors, and a sound-machine switch.
+
+The account setup in this branch implements the authentication flow recovered from the signed Android app. **It is a draft pending testing with a physical Lollipop camera.** Local protocol, account-flow, and Homebridge-boundary tests pass; current vendor responses and camera firmware acceptance remain to be checked.
 
 ## Installation
-This plugin is supported under [Homebridge](https://homebridge.io) and is untested on [HOOBS](https://hoobs.org). It is highly recommend that you use [Homebridge Config UI X](https://www.npmjs.com/package/homebridge-config-ui-x) to install and configure this plugin.
 
-## Configuration
-### Cameras with authenticated firmware
+Install this plugin through Homebridge. [Homebridge Config UI X](https://github.com/homebridge/homebridge-config-ui-x) provides the account sign-in screen. This plugin is untested on HOOBS.
 
-Configure the camera's **IP address and camera pairing ID**. The plugin derives
-the RTSP credentials using the routine recovered from the author's original
-beta.5 source, then starts video and snapshots without waiting for MQTT.
-Listening audio is enabled by default and can be disabled with `audio: false`.
+Development changes are on `fix/authenticated-rtsp` in [draft PR #2](https://github.com/senorshaun/homebridge-lollipop/pull/2). They are not an npm release.
+
+## Automatic account setup
+
+1. Open the Lollipop plugin's settings in Homebridge Config UI X.
+2. Sign in with the email address and password for the Lollipop account that owns the camera.
+3. If Lollipop sends an email verification code, enter it in the next step. A mistyped code can be retried; an expired code requires a new sign-in.
+4. Review the discovered camera names, then restart Homebridge or the plugin's child bridge. The sign-in screen saves the account configuration automatically.
+
+**You do not need to enter an IP address, camera ID, RTSP URL, or certificate.** The plugin reads each camera's ID and local address from its account record, derives its RTSP credentials, provisions its MQTT client certificate/private key, and connects to local MQTT over TLS on port 1883.
+
+All cameras returned by the account are discovered by default. The sound-machine switch and microphone audio are enabled. Homebridge must be able to reach the cameras on the local network; account sign-in does not tunnel local video or MQTT through the internet.
+
+The resulting configuration looks like this:
+
+```json
+{
+  "platform": "Lollipop",
+  "account": {
+    "email": "you@example.com"
+  },
+  "cameraDefaults": {
+    "audio": true,
+    "enableSoundMachine": true
+  }
+}
+```
+
+Interactive sign-in uses the password only for the authentication request. It stores the resulting session, camera metadata, and verified MQTT identity in Homebridge's private storage, with owner-only directory/file permissions. It does not put the password, token, camera ID, or client key into `config.json`. Existing account passwords or manually supplied tokens are removed from the configuration after successful interactive sign-in.
+
+The plugin refreshes account camera records every five minutes and updates local addresses without recreating the HomeKit camera. Valid MQTT identities are reused for twelve hours before refreshing. During a network or server outage, previously authenticated metadata and still-valid credentials can be reused for up to seven days. Authentication rejection, TLS verification failure, and denied access do not use the outage fallback. Existing local connections continue during a cloud outage. Expired or revoked sessions require sign-in again.
+
+### Sound-machine switch
+
+The HomeKit switch uses the same authenticated MQTT connection as the camera's event subscriptions:
+
+- **On:** resume the sound selected in the Lollipop app and repeat it.
+- **Off:** pause playback.
+- After subscribing or reconnecting, query the camera's current sound status.
+- Complete a switch change after receiving the requested playback state from the camera. Disconnection, rejection, or no confirmation within eight seconds returns an error to HomeKit.
+
+Select the track or sound in the Lollipop app first. Track selection, volume controls, and two-way talk are not implemented. Interactive commands are not queued for replay after a disconnection.
+
+### Camera preferences and existing HomeKit accessories
+
+Open **Camera preferences and advanced settings** to configure defaults and individual cameras. `cameraDefaults` applies to every discovered camera. Optional `lollipops` entries override those defaults:
+
+```json
+{
+  "platform": "Lollipop",
+  "account": { "email": "you@example.com" },
+  "cameraDefaults": {
+    "audio": true,
+    "enableSoundMachine": true,
+    "movementSensitivity": 10
+  },
+  "lollipops": [
+    {
+      "accountCameraName": "Nursery",
+      "name": "Crib",
+      "enableCryingDetectionSensor": true
+    },
+    {
+      "accountCameraName": "Guest room",
+      "enabled": false
+    }
+  ]
+}
+```
+
+`accountCameraName` is the name displayed in the Lollipop app; `name` is the HomeKit name. An optional raw `cameraId` is available as an advanced selector if account camera names are ambiguous. A `name` that matches the app camera name also selects that camera. A single existing camera configuration is automatically matched to a single account camera, retaining its HomeKit name and settings.
+
+Existing cached camera/switch identities are reused when they can be matched. Newly discovered cameras use stable identities based on their camera ID, so changing a DHCP address or the name in the Lollipop app does not create another HomeKit camera. An existing manual `ip` is superseded by account discovery. A camera temporarily missing its address remains selected until the account reports its address.
+
+| Setting | Behavior |
+| --- | --- |
+| `audio` | Listen to the camera microphone; default `true`. |
+| `enableSoundMachine` | Expose the playback switch; default `true` for account cameras. |
+| `unbridge` | Publish the camera separately; it must then be paired in the Home app. The sound switch stays bridged. |
+| `movementSensitivity` | `0` disables movement; `10` low, `5` medium, `2` high sensitivity. Account default is `10`. |
+| `enableCryingDetectionSensor` | Expose the camera's crying events, configured in the Lollipop app. |
+| `enableCrossingDetectionSensor` | Expose the camera's configured barrier-crossing events. |
+| `enableNoiseSensor` | Expose the camera's configured noise events. |
+| `contactSensors` | Present configured event sensors as contact sensors. |
+| `debug` | Platform-level diagnostic logging; camera URLs and stream keys are redacted. |
+
+**HomeKit Secure Video remains unavailable in account mode.** The recovered recording delegate has separate unfinished work; this change restores the account/MQTT/video path and sound control. Event sensors can operate without enabling HKSV.
+
+### Setup without the sign-in screen
+
+For an account without email verification enabled, a headless configuration may supply `account.email` and a masked `account.password`. An existing legitimate `account.sessionToken` may be used instead. These advanced fields are stored in the Homebridge configuration by the user; the interactive sign-in flow avoids storing them there.
+
+If an email code is required, finish sign-in through the plugin settings instead of repeatedly restarting with a password. The plugin stops automatic login attempts when verification or corrected credentials are required. Do not paste passwords, tokens, complete camera URLs, IDs, or downloaded keys into issue reports.
+
+## Manual video setup
+
+Manual configuration remains available by omitting `account`.
+
+### Known camera ID
 
 ```json
 {
@@ -28,33 +123,11 @@ Listening audio is enabled by default and can be disabled with `audio: false`.
 }
 ```
 
-`cameraId` must contain the original camera/pairing ID from the camera's account
-record or app data. It is not the already-hashed identifier in the RTSP stream
-path, and this implementation does not use the hardware serial number. Pairing
-the camera again can change its pairing ID. The plugin does not yet log in to
-the cloud API or discover this ID on firmware that requires MQTT authentication.
+The plugin derives the RTSP password from the original pairing ID and an optional `rtspUsername` (default `homebridge`). The ID is the account camera's object ID, not the printed hardware serial or the already-hashed stream path. Manual ID mode supplies video, snapshots, and listening audio; it has no account session to provision MQTT, so the sound switch, sensors, and HKSV are disabled.
 
-The default username is `homebridge`; `rtspUsername` optionally changes it. The
-recovered derivation is:
+### Complete authenticated URL
 
-```text
-password = MD5(username + ":" + cameraId + ":6A09E667BB67AE853C6EF372")
-streamId = MD5(cameraId)
-URL = rtsp://username:password@ip:554/live/streamId/ch00_0
-```
-
-Both hashes consume UTF-8 text and produce lowercase hexadecimal output. The
-uppercase constant is literal text, and the colons are part of the input. No
-hexadecimal decoding or additional hashing of the input ID is performed.
-Username characters are URL-encoded only after computing the password. The
-recovered source establishes the algorithm; current camera firmware and HomeKit
-playback still require physical validation.
-
-#### Use an existing authenticated URL
-
-A **complete authenticated RTSP URL** can also be supplied. When `rtspUrl` is
-present it takes precedence over `cameraId` and `rtspUsername`, allowing a
-different credential scheme or stream path without changing the plugin.
+Supply `rtspUrl` instead of `ip` and `cameraId` when you already have a working authenticated stream URL. It takes precedence over the derived credentials and preserves its path and query. An optional `ip` must match its host. Percent-encode special characters in the username/password.
 
 ```json
 {
@@ -62,97 +135,34 @@ different credential scheme or stream path without changing the plugin.
   "lollipops": [
     {
       "name": "Crib",
-      "rtspUrl": "rtsp://STREAM_USERNAME:STREAM_PASSWORD@192.168.0.2:554/live/EXISTING_STREAM_ID/ch00_0",
-      "audio": true,
-      "unbridge": true
+      "rtspUrl": "rtsp://USERNAME:PASSWORD@192.168.0.2:554/live/EXISTING_STREAM_ID/ch00_0"
     }
   ]
 }
 ```
 
-Replace the example with the URL supplied by your own camera/app. Keep its path
-unchanged; do not hash its stream identifier again. URL special characters in the
-username and password must be percent-encoded. An optional `ip` must match the
-URL's host. The settings UI masks the URL, and plugin logs redact camera URLs and
-HomeKit stream keys.
+This is also video-only without an account. The owner's Android app database can contain an authenticated URL: `LollipopProvider.db`, `baby_camera`, `internal_live_url`; see the [original recovery write-up](https://dparv.dev/2023/08/16/reverse-engineering-lollipop-camera.html). The Android **cloud camera record** uses the same field name for a bare local address; the account implementation handles that distinction.
 
-This mode provides video, snapshots, and listening audio. Camera motion, crying,
-crossing, and noise events, the sound-machine switch, and event-triggered HomeKit
-Secure Video recording require MQTT and are disabled in this mode. Cached sensor
-and sound-machine accessories are removed; the camera retains its existing
-name-based HomeKit identity. Two-way talk is not implemented.
+### Older firmware with anonymous MQTT
 
-The URL can be recovered from the owner's Android app database on a rooted device
-or emulator: `LollipopProvider.db`, table `baby_camera`, column `internal_live_url`.
-See the [original recovery write-up](https://dparv.dev/2023/08/16/reverse-engineering-lollipop-camera.html)
-and [the firmware issue](https://github.com/senorshaun/homebridge-lollipop/issues/1).
-The plugin does not access the app database. Treat the camera ID and complete URL
-as credentials and do not include actual values in issue reports.
+For older cameras that permit unauthenticated MQTT, configure `name` and `ip` while omitting `account`, `cameraId`, and `rtspUrl`. Discovery subscribes to camera topics for at most fifteen seconds. The legacy `pairingID` setting skips this discovery step when already known. This mode retains the older anonymous TLS behavior; it does not substitute for authenticated account setup on newer firmware.
 
-### MQTT firmware and common settings
+## Protocol and troubleshooting
 
-For cameras that still allow local MQTT without client authentication, configure
-`ip` and omit both `cameraId` and `rtspUrl`. MQTT discovery is bounded to 15
-seconds and stops with an actionable error if it fails. The older `pairingID`
-setting skips only the discovery step in this MQTT mode. Use `cameraId` for the
-authenticated video mode above.
+The [MQTT authentication notes](docs/mqtt-authentication.md) record the recovered account requests, credential checks, TLS policy, password derivations, certificate provenance, and control messages. See also the [original firmware issue](https://github.com/senorshaun/homebridge-lollipop/issues/1).
 
-The newer MQTT authentication flow has been recovered from the Android app: it
-requires an account session, a downloaded client certificate/private key, and a
-separate MQTT password. This draft does not yet perform that provisioning. See
-the [MQTT authentication findings](docs/mqtt-authentication.md) for the verified
-protocol, certificate roles, and remaining hardware checks.
-
-- `platform`: __(Required)__ Must be set to `Lollipop`
-- `debug`: _(Boolean)_ When set to `true`, lots of data will be populated in to the logs. Its recommended you only set this temporarily
-- `lollipops`: _(Array of objects)_ It's likely you will only have one camera object, but multiple are allowed
-- `name`: __(Required)__ This is the name of the Lollipop that will appear in the logs and initially in the Home App
-- `ip`: _(Required when `rtspUrl` is omitted)_ The IP address or hostname of the Lollipop. A DHCP reservation avoids changes to a configured IP address.
-- `cameraId`: _(String)_ Original camera/pairing ID. With `ip`, derives the RTSP credentials and selects video mode without MQTT.
-- `rtspUsername`: _(String, default `homebridge`)_ Username used with `cameraId` to derive the stream password. Ignored with an explicit `rtspUrl`.
-- `rtspUrl`: _(String)_ Complete authenticated RTSP URL. Selects video mode without MQTT and takes precedence over `cameraId`.
-- `audio`: _(Boolean, default `true`)_ Enable listening audio from the camera microphone.
-- `pairingID`: _(Optional string, MQTT firmware only)_ A known camera pairing ID that avoids the initial MQTT discovery step.
-- `unbridge`: _(Boolean)_ Recommend to be set to `true` when this plugin is not configured to run as a child bridge. Camera streaming can slow down other plugins on the same bridge. When set to `true`, the camera will need to be paired within HomeKit. NOTE: The sensor names attached the camera will default to the camera name upon plugin restart when set this is set to `true` 
-- `enableSoundMachine`: _(Boolean)_ Creates a switch that will play the queued sound effect or song within the Lollipop app when turned on, and pause when turned off. Even if the camera is configured as `unbridge`:`true`, this switch will be presented bridged and does not need to be paired
-### Sensors (MQTT connection required)
-- `contactSensors`: _(Boolean)_ When not set, or set to `false`, the enabled sensors will be presented as Motion Sensors. When set to `true`, they will be preseneted as Contact Sensors
-- `hksv`: _(Boolean)_ Enable the camera to be compatible with HomeKit Secure Video. When set to `true`, an additional motion sensor is configured and attached to the camera that triggers on any other sensor trigger. It is this sensor that triggers HomeKit to record motion. NOTE: This sensor will always be configured as a Motion Sensor regardless of `contactSensors`. You must have a home hub and supported iCloud plan for this to be useful
-- `movementSensitivity`: _(Integer)_ When set to a value greater than 0, a sensor will be added to the camera that is triggered when the motion level detected by the Lollipop is greater than this setting. Homebridge Config UI X presents predefined names for some values. 0:`Disabled`, 2:`High`, 5:`Medium`, 10:`Low`. This sensor automatically resets after 30 seconds of the motion level not being greater than this setting
-- `enableCryingDetectionSensor`: _(Boolean)_ When set to `true`, a sensor will be added to the camera that is triggered any time the Lollipop determines crying is detected above the level set within the Lollipop app, as long as Crying Detection is enabled within the Lollipop app. This sensor automatically resets 60 seconds after the last Crying Detection event
-- `enableCrossingDetectionSensor`: _(Boolean)_ When set to `true`, a sensor will be added to the camera that is triggered any time the Lollipop determines barrier crossing is detected, as long as Crossing Detection is enabled within the Lollipop app. This sensor automatically resets 60 seconds after the last Crossing Detection event
-- `enableNoiseSensor`: _(Boolean)_ When set to `true`, a sensor will be added to the camera that is triggered any time the Lollipop determines noise levels are above the in app configured threshold, as long as Crossing Detection is enabled within the Lollipop app. This sensor automatically resets 60 seconds after the last Noise event
-
-### MQTT Config Example
-```json
-{
-	"platform": "Lollipop",
-	"lollipops": [
-		{
-			"name": "Crib",
-			"ip": "192.168.0.2",
-			"enableSoundMachine": true,
-			"movementSensitivity": 10,
-			"enableCryingDetectionSensor": true
-		}
-	]
-}
-```
-
-## Notes
- - Sensors attached to the camera will change their name to the name of the camera after they are added in the Home app, regardless of what they are named when initially added. If the camera is not set up as `unbridge`, the names can be changed and they won't revert naming on restart. However if it is set as `unbridge`, they will revert naming to the camera name after every restart.
+- **Email code/sign-in needed:** reopen plugin settings, complete sign-in, and restart the child bridge.
+- **No local address:** ensure the camera is online in the Lollipop app. Discovery will retry automatically.
+- **MQTT unavailable:** check that Homebridge can reach the camera on local TCP 1883. Logs distinguish TLS, MQTT login, and subscription failures. Video can still start if only MQTT provisioning is unavailable.
+- **Camera cannot confirm a sound change:** check the selected sound and connectivity in the Lollipop app. The switch reports an error instead of replaying the request later.
+- **Camera IP changed:** allow the next five-minute account refresh. Restarting the child bridge also refreshes discovery.
 
 ## Development checks
 
-Run `npm test` with Node.js 18 or newer. These tests use mocked Homebridge, MQTT,
-and process boundaries to check startup, URL handling, credential redaction,
-session cleanup, and FFmpeg success/failure reporting. They do not establish
-compatibility with a particular physical camera or firmware.
+Run `npm install`, then `npm test` with Node.js 18 or newer. The tests exercise account/OTP responses, private storage, cloud-outage and revocation handling, real certificate/key validation, Homebridge integration, switch confirmation, MQTT reconnects, log redaction, and media lifecycle behavior. The local TLS/MQTT integration tests require the installed `mqtt` dependency and an `openssl` executable to generate temporary synthetic certificates.
 
- ## To-Do
-  - Get Two-Way Audio working
-  - Find a solution to the sensor name issue, if there is one in the future
-  - If there is a request for being able to change the sound machine track or more control over it, the code could be updated to change the presented accessory to a TV that has sources for each track, volume control, and power to play/pause
+The app protocol is supported by signed Android versions 3.11.11 (June 2023) and 4.5.2 (February 2025). Tests use account fixtures, synthetic identities, and local brokers. They do not establish acceptance by a physical camera, current vendor account service, or a HomeKit hub.
 
-  ## Credit
-  I started with the [homebridge-camera-ffmpeg](https://github.com/Sunoo/homebridge-camera-ffmpeg) code base, removed and added as needed, so thank you for the work already done by [Sunoo](https://www.github.com/Sunoo)
+## Credit
+
+This project started with [homebridge-camera-ffmpeg](https://github.com/Sunoo/homebridge-camera-ffmpeg). Thank you to [Sunoo](https://github.com/Sunoo) and its contributors.

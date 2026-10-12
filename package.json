@@ -25,6 +25,7 @@
     "homebridge": ">=1.4.0"
   },
   "dependencies": {
+    "@homebridge/plugin-ui-utils": "^1.0.3",
     "ffmpeg-for-homebridge": "^0.1.4",
     "mqtt": "^4.2.8",
     "pick-port": "^1.0.0"

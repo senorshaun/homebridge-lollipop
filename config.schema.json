@@ -5,6 +5,106 @@
   "schema": {
     "type": "object",
     "properties": {
+      "account": {
+        "title": "Lollipop account",
+        "type": "object",
+        "description": "Use the sign-in form above for automatic camera discovery. It saves your email here and stores the session privately on the Homebridge host.",
+        "properties": {
+          "email": {
+            "title": "Email address",
+            "type": "string",
+            "format": "email",
+            "description": "Account used for automatic setup."
+          },
+          "password": {
+            "title": "Password (headless setup only)",
+            "type": "string",
+            "format": "password",
+            "description": "Optional for configuration without the sign-in form. This value is stored in config.json. Interactive sign-in above avoids storing the password and supports email verification codes."
+          },
+          "sessionToken": {
+            "title": "Session token (headless setup only)",
+            "type": "string",
+            "format": "password",
+            "description": "Optional existing account session for configuration without the sign-in form. This value is stored in config.json. Leave empty when using interactive sign-in."
+          }
+        }
+      },
+      "cameraDefaults": {
+        "title": "Account camera preferences",
+        "type": "object",
+        "description": "Apply these preferences to automatically discovered account cameras. Camera overrides below can change individual cameras.",
+        "properties": {
+          "audio": {
+            "title": "Enable camera audio",
+            "type": "boolean",
+            "default": true,
+            "description": "Listen to the camera microphone. Disable to troubleshoot a stream with unsupported or missing audio."
+          },
+          "enableSoundMachine": {
+            "title": "Enable sound-machine switch",
+            "type": "boolean",
+            "default": true,
+            "description": "Play or pause each camera’s sound machine from a HomeKit switch."
+          },
+          "unbridge": {
+            "title": "Configure camera as an unbridged accessory",
+            "description": "This is recommended if you aren't running the plugin as a child bridge and you don't have HKSV enabled.",
+            "type": "boolean"
+          },
+          "contactSensors": {
+            "title": "Configure the sensors as Contact Sensors rather than Motion Sensors.",
+            "type": "boolean"
+          },
+          "movementSensitivity": {
+            "title": "Movement Sensitivity Level",
+            "description": "Select the level of movement sensitivity to trigger the movement sensor attached to the HomeKit camera.",
+            "type": "integer",
+            "oneOf": [
+              {
+                "enum": [
+                  0
+                ],
+                "title": "Disabled"
+              },
+              {
+                "enum": [
+                  10
+                ],
+                "title": "Low"
+              },
+              {
+                "enum": [
+                  5
+                ],
+                "title": "Medium"
+              },
+              {
+                "enum": [
+                  2
+                ],
+                "title": "High"
+              }
+            ],
+            "default": 10
+          },
+          "enableCryingDetectionSensor": {
+            "title": "Expose a sensor for crying detection notifications.",
+            "description": "Crying Detection must be configured in the Lollipop app for this to trigger.",
+            "type": "boolean"
+          },
+          "enableCrossingDetectionSensor": {
+            "title": "Expose a sensor for barrier crossing detection notifications",
+            "description": "Crossing Detection must be configured in the Lollipop app for this to trigger.",
+            "type": "boolean"
+          },
+          "enableNoiseSensor": {
+            "title": "Expose a sensor for unacceptable noise detection notifications.",
+            "description": "Noise must be configured in the Lollipop app for this to trigger.",
+            "type": "boolean"
+          }
+        }
+      },
       "lollipops": {
         "type": "array",
         "items": {
@@ -14,13 +114,25 @@
               "title": "Name",
               "type": "string",
               "placeholder": "Lollipop",
-              "minLength": 1
+              "minLength": 1,
+              "description": "HomeKit name. In account mode, an existing matching name can also select the camera to override."
+            },
+            "accountCameraName": {
+              "title": "Camera name in the Lollipop app",
+              "type": "string",
+              "description": "Optional selector when overriding an account camera. Enter its current name in the Lollipop app, then choose the HomeKit name above. Omit for automatic setup."
+            },
+            "enabled": {
+              "title": "Enable this camera",
+              "type": "boolean",
+              "default": true,
+              "description": "Turn off to hide this selected account camera from Homebridge."
             },
             "cameraId": {
               "title": "Camera ID (pairing ID)",
               "type": "string",
               "format": "password",
-              "description": "Original camera/pairing ID from the camera's account record or app data. With the camera IP, derives stream credentials and enables video without MQTT. Use the original ID, not the hardware serial or already-hashed stream path."
+              "description": "Optional advanced selector for an account camera. For manual setup, combine the original camera/pairing ID with its IP to enable authenticated video without controls. Use the original ID, not the hardware serial or hashed stream path."
             },
             "rtspUsername": {
               "title": "RTSP username",
@@ -32,13 +144,13 @@
               "title": "Authenticated RTSP URL",
               "type": "string",
               "format": "password",
-              "description": "Optional alternative to Camera ID. Paste the complete stream URL, including its username and password. This URL takes precedence over Camera ID. Sensors, sound controls, and event recording require MQTT and are unavailable in either authenticated video mode."
+              "description": "Optional complete authenticated video URL. Account mode still connects controls automatically. Manual RTSP-only setup does not include sensors or sound controls."
             },
             "ip": {
               "title": "Camera IP or hostname",
               "type": "string",
               "placeholder": "0.0.0.0",
-              "description": "Required with Camera ID or for MQTT discovery. Enter only the address or hostname, without a port or path. Optional with an authenticated RTSP URL; if supplied, it must match the URL host."
+              "description": "Manual setup only: address or hostname without a port or path. Account cameras use the address reported by Lollipop automatically. Optional with a complete RTSP URL."
             },
             "audio": {
               "title": "Enable camera audio",
@@ -54,14 +166,14 @@
             "hksv": {
               "title": "Enable HomeKit Secure Video Recording",
               "type": "boolean",
-              "description": "Requires a working MQTT connection for camera events, a HomeKit hub, and a supported iCloud plan. Unavailable in authenticated video mode (Camera ID or RTSP URL).",
+              "description": "Legacy experimental recording option. HomeKit Secure Video remains unavailable in account setup and manual authenticated video modes.",
               "default": false
             },
             "enableSoundMachine": {
-              "title": "Expose a switch in HomeKit to play/pause the built in sound machine.",
+              "title": "Enable sound-machine switch",
               "type": "boolean",
               "default": true,
-              "description": "Requires a working MQTT connection. Unavailable in authenticated video mode (Camera ID or RTSP URL)."
+              "description": "Play or pause the built-in sound machine from HomeKit. Enabled by default for account cameras. Requires MQTT; unavailable in manual RTSP-only setup."
             },
             "contactSensors": {
               "title": "Configure the sensors as Contact Sensors rather than Motion Sensors.",
@@ -114,17 +226,16 @@
               "description": "Noise must be configured in the Lollipop app for this to trigger.",
               "type": "boolean"
             }
-          },
-          "required": [
-            "name"
-          ]
+          }
         },
-        "title": "Cameras"
+        "title": "Camera overrides or manual cameras",
+        "description": "With account sign-in, use optional overrides to rename or hide a camera. Cameras are discovered automatically. Without an account, enter manual connection details here."
       },
       "debug": {
         "title": "Enable debug logging",
         "type": "boolean"
       }
     }
-  }
+  },
+  "customUi": true
 }

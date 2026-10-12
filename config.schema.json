@@ -16,17 +16,29 @@
               "placeholder": "Lollipop",
               "minLength": 1
             },
+            "cameraId": {
+              "title": "Camera ID (pairing ID)",
+              "type": "string",
+              "format": "password",
+              "description": "Original camera/pairing ID from the camera's account record or app data. With the camera IP, derives stream credentials and enables video without MQTT. Use the original ID, not the hardware serial or already-hashed stream path."
+            },
+            "rtspUsername": {
+              "title": "RTSP username",
+              "type": "string",
+              "default": "homebridge",
+              "description": "Used with Camera ID to calculate the stream password. Ignored when a complete authenticated RTSP URL is supplied."
+            },
             "rtspUrl": {
               "title": "Authenticated RTSP URL",
               "type": "string",
               "format": "password",
-              "description": "Paste the complete stream URL from your camera/app, including its stream username and password. Enables live video, snapshots, and listening audio. Sensors, sound controls, and event recording require MQTT and are unavailable in this mode."
+              "description": "Optional alternative to Camera ID. Paste the complete stream URL, including its username and password. This URL takes precedence over Camera ID. Sensors, sound controls, and event recording require MQTT and are unavailable in either authenticated video mode."
             },
             "ip": {
               "title": "Camera IP or hostname",
               "type": "string",
               "placeholder": "0.0.0.0",
-              "description": "Required for MQTT discovery. Optional with an authenticated RTSP URL; if supplied, it must match the URL host."
+              "description": "Required with Camera ID or for MQTT discovery. Enter only the address or hostname, without a port or path. Optional with an authenticated RTSP URL; if supplied, it must match the URL host."
             },
             "audio": {
               "title": "Enable camera audio",
@@ -42,14 +54,14 @@
             "hksv": {
               "title": "Enable HomeKit Secure Video Recording",
               "type": "boolean",
-              "description": "Requires a working MQTT connection for camera events, a HomeKit hub, and a supported iCloud plan. Unavailable with an authenticated RTSP URL.",
+              "description": "Requires a working MQTT connection for camera events, a HomeKit hub, and a supported iCloud plan. Unavailable in authenticated video mode (Camera ID or RTSP URL).",
               "default": false
             },
             "enableSoundMachine": {
               "title": "Expose a switch in HomeKit to play/pause the built in sound machine.",
               "type": "boolean",
               "default": true,
-              "description": "Requires a working MQTT connection. Unavailable with an authenticated RTSP URL."
+              "description": "Requires a working MQTT connection. Unavailable in authenticated video mode (Camera ID or RTSP URL)."
             },
             "contactSensors": {
               "title": "Configure the sensors as Contact Sensors rather than Motion Sensors.",

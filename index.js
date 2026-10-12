@@ -1,7 +1,7 @@
 "use strict";
 const logger = require("./lib/logger");
 let Lollipop = require("./lib/lollipop");
-const { resolveCameraConnection } = require('./lib/cameraConnection');
+const { resolveCameraConnection, hasDirectStreamConfig } = require('./lib/cameraConnection');
 const PLUGIN_NAME = 'homebridge-lollipop';
 const PLATFORM_NAME = 'Lollipop';
 
@@ -46,7 +46,7 @@ class LollipopPlatform {
             } else if (!lollipopConfig.ip && !lollipopConfig.rtspUrl) {
                 this.log.error('No authenticated RTSP URL or camera IP address specified. This lollipop will be skipped.', lollipopConfig.name);
             } else {
-                if (lollipopConfig.rtspUrl !== undefined && lollipopConfig.rtspUrl !== '') {
+                if (hasDirectStreamConfig(lollipopConfig)) {
                     try {
                         resolveCameraConnection(lollipopConfig);
                     } catch (error) {

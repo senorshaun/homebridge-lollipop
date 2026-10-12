@@ -8,9 +8,53 @@ This plugin is supported under [Homebridge](https://homebridge.io) and is untest
 ## Configuration
 ### Cameras with authenticated firmware
 
-Configure the camera's **complete authenticated RTSP URL**. The plugin uses that
-URL directly for live video and snapshots, without waiting for MQTT discovery.
+Configure the camera's **IP address and camera pairing ID**. The plugin derives
+the RTSP credentials using the routine recovered from the author's original
+beta.5 source, then starts video and snapshots without waiting for MQTT.
 Listening audio is enabled by default and can be disabled with `audio: false`.
+
+```json
+{
+  "platform": "Lollipop",
+  "lollipops": [
+    {
+      "name": "Crib",
+      "ip": "192.168.0.2",
+      "cameraId": "YOUR_CAMERA_PAIRING_ID",
+      "audio": true,
+      "unbridge": true
+    }
+  ]
+}
+```
+
+`cameraId` must contain the original camera/pairing ID from the camera's account
+record or app data. It is not the already-hashed identifier in the RTSP stream
+path, and this implementation does not use the hardware serial number. Pairing
+the camera again can change its pairing ID. The plugin does not yet log in to
+the cloud API or discover this ID on firmware that requires MQTT authentication.
+
+The default username is `homebridge`; `rtspUsername` optionally changes it. The
+recovered derivation is:
+
+```text
+password = MD5(username + ":" + cameraId + ":6A09E667BB67AE853C6EF372")
+streamId = MD5(cameraId)
+URL = rtsp://username:password@ip:554/live/streamId/ch00_0
+```
+
+Both hashes consume UTF-8 text and produce lowercase hexadecimal output. The
+uppercase constant is literal text, and the colons are part of the input. No
+hexadecimal decoding or additional hashing of the input ID is performed.
+Username characters are URL-encoded only after computing the password. The
+recovered source establishes the algorithm; current camera firmware and HomeKit
+playback still require physical validation.
+
+#### Use an existing authenticated URL
+
+A **complete authenticated RTSP URL** can also be supplied. When `rtspUrl` is
+present it takes precedence over `cameraId` and `rtspUsername`, allowing a
+different credential scheme or stream path without changing the plugin.
 
 ```json
 {
@@ -42,23 +86,25 @@ The URL can be recovered from the owner's Android app database on a rooted devic
 or emulator: `LollipopProvider.db`, table `baby_camera`, column `internal_live_url`.
 See the [original recovery write-up](https://dparv.dev/2023/08/16/reverse-engineering-lollipop-camera.html)
 and [the firmware issue](https://github.com/senorshaun/homebridge-lollipop/issues/1).
-That is an external credential-recovery step; the plugin does not access the app
-database or generate camera passwords. Treat the complete URL as a credential
-and do not include it in issue reports.
+The plugin does not access the app database. Treat the camera ID and complete URL
+as credentials and do not include actual values in issue reports.
 
 ### MQTT firmware and common settings
 
 For cameras that still allow local MQTT without client authentication, configure
-`ip` and omit `rtspUrl`. MQTT discovery is bounded to 15 seconds and stops with an
-actionable error if it fails. An optional known `pairingID` skips discovery; it
-does not provide authentication for newer firmware.
+`ip` and omit both `cameraId` and `rtspUrl`. MQTT discovery is bounded to 15
+seconds and stops with an actionable error if it fails. The older `pairingID`
+setting skips only the discovery step in this MQTT mode. Use `cameraId` for the
+authenticated video mode above.
 
 - `platform`: __(Required)__ Must be set to `Lollipop`
 - `debug`: _(Boolean)_ When set to `true`, lots of data will be populated in to the logs. Its recommended you only set this temporarily
 - `lollipops`: _(Array of objects)_ It's likely you will only have one camera object, but multiple are allowed
 - `name`: __(Required)__ This is the name of the Lollipop that will appear in the logs and initially in the Home App
 - `ip`: _(Required when `rtspUrl` is omitted)_ The IP address or hostname of the Lollipop. A DHCP reservation avoids changes to a configured IP address.
-- `rtspUrl`: _(String)_ Complete authenticated RTSP URL. This selects the video mode described above.
+- `cameraId`: _(String)_ Original camera/pairing ID. With `ip`, derives the RTSP credentials and selects video mode without MQTT.
+- `rtspUsername`: _(String, default `homebridge`)_ Username used with `cameraId` to derive the stream password. Ignored with an explicit `rtspUrl`.
+- `rtspUrl`: _(String)_ Complete authenticated RTSP URL. Selects video mode without MQTT and takes precedence over `cameraId`.
 - `audio`: _(Boolean, default `true`)_ Enable listening audio from the camera microphone.
 - `pairingID`: _(Optional string, MQTT firmware only)_ A known camera pairing ID that avoids the initial MQTT discovery step.
 - `unbridge`: _(Boolean)_ Recommend to be set to `true` when this plugin is not configured to run as a child bridge. Camera streaming can slow down other plugins on the same bridge. When set to `true`, the camera will need to be paired within HomeKit. NOTE: The sensor names attached the camera will default to the camera name upon plugin restart when set this is set to `true` 

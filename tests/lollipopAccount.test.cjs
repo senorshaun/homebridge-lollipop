@@ -6,8 +6,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const https = require('node:https');
+const { EventEmitter } = require('node:events');
 const { execFileSync } = require('node:child_process');
-const { LollipopAccount, LollipopAccountError, normalizeCamera } = require('../lib/lollipopAccount');
+const { LollipopAccount, LollipopAccountError, normalizeCamera, requestHttps } = require('../lib/lollipopAccount');
 const { AccountStore } = require('../lib/accountStore');
 
 const EMAIL = 'owner@example.invalid';
@@ -256,13 +258,19 @@ test('MQTT provisioning verifies real PEM bytes, sends no account headers to dow
 });
 
 test('raw-byte checksum mismatch refuses line-ending-normalized credentials and saves no identity', async () => {
+    const events = [];
     const env = await signedIn(request => apiPath(request) === '/client-cert' ?
-        { statusCode: 200, headers: {}, body: Buffer.from(cert.toString('utf8').replace(/\n/g, '\r\n')) } : standardHandler(request));
+        { statusCode: 200, headers: {}, body: Buffer.from(cert.toString('utf8').replace(/\n/g, '\r\n')) } : standardHandler(request),
+    { diagnostics: (event, fields) => events.push({ event, ...fields }) });
     await assert.rejects(env.account.getMqttCredentials(CAMERA.objectId), hasCode('CHECKSUM_MISMATCH'));
     assert.deepEqual(JSON.parse((await stored(env)).text).identities, {});
+    assert.ok(events.some(event => event.event === 'account.identity.checksum' && event.file === 'cert' && event.matches === false));
+    assert.ok(events.some(event => event.event === 'account.identity.checksum' && event.file === 'key' && event.matches === true));
+    assert.ok(events.some(event => event.event === 'account.identity' && event.errorCode === 'CHECKSUM_MISMATCH'));
 });
 
 test('correct checksums do not permit a mismatched private key', async () => {
+    const events = [];
     const otherKey = crypto.generateKeyPairSync('rsa', { modulusLength: 2048,
         privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' }
     }).privateKey;
@@ -273,8 +281,11 @@ test('correct checksums do not permit a mismatched private key', async () => {
             return json(body);
         }
         return apiPath(request) === '/client-key' ? { statusCode: 200, headers: {}, body: Buffer.from(otherKey) } : standardHandler(request);
-    });
+    }, { diagnostics: (event, fields) => events.push({ event, ...fields }) });
     await assert.rejects(env.account.getMqttCredentials(CAMERA.objectId), hasCode('INVALID_CERTIFICATE'));
+    assert.ok(events.some(event => event.event === 'account.identity.validation' && event.phase === 'pair_match' &&
+        event.reason === 'key_mismatch' && event.outcome === 'failure'));
+    assert.ok(!JSON.stringify(events).includes(otherKey));
 });
 
 test('credential redirects remain HTTPS and never receive the account session', async () => {
@@ -421,4 +432,132 @@ test('shutdown blocks late HTTP results from saving an account session', async (
     release(json({ result: { sessionToken: TOKEN } }));
     await assert.rejects(login, hasCode('CLOSED'));
     assert.equal(JSON.parse((await stored(env)).text).sessionToken, undefined);
+});
+
+test('account diagnostics trace setup and cached credentials without exposing any private response values', async () => {
+    const events = [];
+    const registered = [];
+    const privateUrl = 'rtsp://synthetic-camera-user:synthetic-camera-password@192.168.1.52/live/synthetic-stream?token=synthetic-rtsp-token';
+    const env = await signedIn(request => {
+        if (apiPath(request) === '/parse/classes/camera') return json({ results: [{ ...CAMERA, internal_live_url: privateUrl }] });
+        if (apiPath(request) === '/client-cert') return {
+            statusCode: 302, headers: { location: 'https://cdn.example.invalid/private-certificate?signature=synthetic-redirect-secret' }, body: Buffer.alloc(0)
+        };
+        if (apiPath(request) === '/private-certificate') return { statusCode: 200, headers: {}, body: cert };
+        return standardHandler(request);
+    }, {
+        diagnostics: (event, fields) => events.push({ event, ...fields }),
+        registerSecrets: values => registered.push(...values)
+    });
+    await env.account.authenticate();
+    const identity = await env.account.getMqttCredentials(CAMERA.objectId);
+    const requestsBeforeCache = env.calls.length;
+    const cached = await env.account.getMqttCredentials(CAMERA.objectId);
+    assert.ok(identity.key.equals(cached.key));
+    assert.equal(env.calls.length, requestsBeforeCache, 'Diagnostics must not introduce network probes on a cache hit');
+    assert.equal(env.account.cameraReference(CAMERA.objectId), 'camera-1');
+    assert.ok(events.some(event => event.event === 'account.cameras.page' && event.count === 1 && event.withAddress === 1 && event.withRtspUrl === 1));
+    assert.ok(events.some(event => event.event === 'account.credential.download' && event.file === 'cert' &&
+        event.phase === 'complete' && event.redirects === 1 && event.bytes === cert.length));
+    assert.ok(events.some(event => event.event === 'account.identity.validation' && event.phase === 'validity' && event.daysRemaining >= 29));
+    assert.ok(events.some(event => event.event === 'account.cache.eligibility' && event.cacheType === 'identity' && event.eligible === true && event.ageMs === 0));
+    assert.ok(events.some(event => event.event === 'account.identity' && event.source === 'cache' && event.cached === true));
+    const text = JSON.stringify(events);
+    const state = JSON.parse((await stored(env)).text);
+    const secrets = [EMAIL, PASSWORD, TOKEN, CAMERA.objectId, CAMERA.name, CAMERA.internal_live_url, privateUrl,
+        'synthetic-camera-user', 'synthetic-camera-password', 'synthetic-stream', 'synthetic-rtsp-token',
+        'credentials.example.invalid', 'cdn.example.invalid', 'synthetic-secret', 'synthetic-redirect-secret',
+        cert.toString('utf8'), key.toString('utf8'), cert.toString('base64'), key.toString('base64'), digest(cert), digest(key), state.installationId];
+    for (const secret of secrets) assert.ok(!text.includes(secret), 'Diagnostics exposed a synthetic private value');
+    for (const secret of [EMAIL, PASSWORD, TOKEN, CAMERA.objectId, privateUrl, cert.toString('utf8'), key.toString('utf8'), state.installationId]) {
+        assert.ok(registered.includes(secret), 'Expected private value was not registered for normal log redaction');
+    }
+    assert.ok(events.every(event => event.durationMs === undefined || (Number.isFinite(event.durationMs) && event.durationMs >= 0)));
+});
+
+test('OTP diagnostics preserve the failed operation and Parse code while excluding error text, timestamps, code and unknown field names', async () => {
+    const events = [];
+    let tries = 0;
+    const rawSecret = 'synthetic-response-field-secret';
+    const env = environment(request => {
+        if (apiPath(request).endsWith('/loginV2')) return json({ result: { timestamp: 1777777777000, [rawSecret]: PASSWORD } });
+        tries++;
+        return tries === 1 ? json({ code: 141, error: PASSWORD + TOKEN + '001234', [rawSecret]: CAMERA.objectId }, 400) :
+            json({ result: { sessionToken: TOKEN, [rawSecret]: PASSWORD } });
+    }, { diagnostics: (event, fields) => events.push({ event, ...fields }) });
+    assert.deepEqual(await env.account.signIn(PASSWORD), { requiresOtp: true });
+    await assert.rejects(env.account.verifyOtp('001234'), hasCode('INVALID_OTP'));
+    assert.deepEqual(await env.account.verifyOtp('001234'), { authenticated: true });
+    assert.equal(env.calls.length, 3);
+    assert.ok(events.some(event => event.event === 'account.http.rejected' && event.operation === 'otp' && event.statusCode === 400 && event.parseCode === 141 && event.errorCode === 'INVALID_OTP'));
+    assert.ok(events.some(event => event.event === 'account.sign_in' && event.requiresOtp === true));
+    assert.ok(events.some(event => event.event === 'account.response.result' && event.operation === 'otp' && event.sessionTokenType === 'string'));
+    for (const secret of [rawSecret, '001234', '1777777777000', EMAIL, PASSWORD, TOKEN, CAMERA.objectId]) {
+        assert.ok(!JSON.stringify(events).includes(secret), 'OTP diagnostics exposed a synthetic private value');
+    }
+});
+
+test('diagnostics and redaction callbacks cannot alter account requests, returned credentials or stored state', async () => {
+    const results = [];
+    for (const mode of ['absent', 'enabled', 'throwing']) {
+        const diagnostics = mode === 'absent' ? undefined : mode === 'enabled' ? () => {} : () => { throw new Error(PASSWORD); };
+        const registerSecrets = mode === 'throwing' ? () => { throw new Error(TOKEN); } : undefined;
+        const env = await signedIn(standardHandler, { diagnostics, registerSecrets });
+        const authenticated = await env.account.authenticate();
+        const credentials = await env.account.getMqttCredentials(CAMERA.objectId);
+        const state = JSON.parse((await stored(env)).text);
+        delete state.installationId;
+        const calls = env.calls.map(request => {
+            const headers = { ...request.headers };
+            delete headers['X-Parse-Installation-Id'];
+            return { url: request.url, method: request.method, headers, body: request.body && request.body.toString('utf8'), maxBytes: request.maxBytes, timeoutMs: request.timeoutMs };
+        });
+        results.push({ authenticated, cert: credentials.cert, key: credentials.key, state, calls });
+    }
+    assert.deepEqual(results[1], results[0]);
+    assert.deepEqual(results[2], results[0]);
+});
+
+test('HTTP failure diagnostics retain safe transport codes and never echo injected error codes or messages', async () => {
+    for (const [code, expected, diagnosticCode] of [
+        ['CERT_HAS_EXPIRED', 'TLS_ERROR', 'CERT_HAS_EXPIRED'],
+        ['ETIMEDOUT', 'NETWORK_ERROR', 'ETIMEDOUT'],
+        [TOKEN, 'NETWORK_ERROR', 'UNKNOWN']
+    ]) {
+        const events = [];
+        const env = environment(() => { throw Object.assign(new Error(PASSWORD + TOKEN), { code }); }, {
+            diagnostics: (event, fields) => events.push({ event, ...fields })
+        });
+        await assert.rejects(env.account.signIn(PASSWORD), hasCode(expected));
+        assert.equal(env.calls.length, 1);
+        assert.ok(events.some(event => event.event === 'account.http.error' && event.operation === 'login' && event.phase === 'transport' &&
+            event.errorCode === expected && event.networkCode === diagnosticCode));
+        assert.ok(!JSON.stringify(events).includes(PASSWORD));
+        assert.ok(!JSON.stringify(events).includes(TOKEN));
+    }
+});
+
+test('the bounded HTTPS transport reports its own timeout and TLS failures without opening a network connection', async () => {
+    const originalRequest = https.request;
+    try {
+        for (const mode of ['timeout', 'tls']) {
+            const events = [];
+            https.request = () => {
+                const request = new EventEmitter();
+                request.end = () => {
+                    if (mode === 'tls') queueMicrotask(() => request.emit('error', Object.assign(new Error(TOKEN), { code: 'CERT_HAS_EXPIRED' })));
+                };
+                request.destroy = () => request;
+                return request;
+            };
+            await assert.rejects(requestHttps({
+                url: 'https://never-contacted.example.invalid', timeoutMs: 5, maxBytes: 100,
+                onDiagnostic: (event, fields) => events.push({ event, ...fields })
+            }), hasCode(mode === 'timeout' ? 'NETWORK_ERROR' : 'TLS_ERROR'));
+            assert.equal(events.length, 1);
+            assert.equal(events[0].reason, mode === 'timeout' ? 'timeout' : 'request_failure');
+            assert.equal(events[0].networkCode, mode === 'timeout' ? 'ETIMEDOUT' : 'CERT_HAS_EXPIRED');
+            assert.ok(!JSON.stringify(events).includes(TOKEN));
+        }
+    } finally { https.request = originalRequest; }
 });

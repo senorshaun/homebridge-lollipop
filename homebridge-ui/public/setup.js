@@ -9,6 +9,8 @@
   const loginForm = byId('login-form');
   const otpForm = byId('otp-form');
   const connectedPanel = byId('account-connected');
+  const debugInput = byId('debug-logging');
+  let debugEnabled = false;
   let accountEmail = '';
   let pendingEmail = '';
   let lastAccountResult = null;
@@ -47,19 +49,52 @@
     message(messages[code] || 'Unable to complete setup. Try again.', 'danger');
   }
 
+  function request(route, payload) {
+    return bridge.request(route, { ...payload, debug: debugEnabled });
+  }
+
+  function readDebug(config) {
+    debugEnabled = Boolean(config && config.debug === true);
+    debugInput.checked = debugEnabled;
+  }
+
   async function run(operation) {
     if (busy) return;
     busy = true;
-    document.querySelectorAll('.lollipop-setup button').forEach(button => { button.disabled = true; });
+    document.querySelectorAll('.lollipop-setup button, #debug-logging').forEach(control => { control.disabled = true; });
     try {
       await operation();
     } catch (error) {
       report(error);
     } finally {
       busy = false;
-      document.querySelectorAll('.lollipop-setup button').forEach(button => { button.disabled = false; });
+      document.querySelectorAll('.lollipop-setup button, #debug-logging').forEach(control => { control.disabled = false; });
     }
   }
+
+  debugInput.addEventListener('change', () => {
+    if (busy) {
+      debugInput.checked = debugEnabled;
+      return;
+    }
+    debugEnabled = debugInput.checked === true;
+    run(async () => {
+      const status = byId('debug-status');
+      status.textContent = 'Saving debug logging setting…';
+      try {
+        // Read the latest form state so changing debug cannot discard a camera,
+        // account setting, or an edit made in the advanced form.
+        const configs = await bridge.getPluginConfig();
+        await bridge.updatePluginConfig(window.LollipopSetupConfig.configureDebug(configs, debugEnabled));
+        await bridge.savePluginConfig();
+        status.textContent = 'Debug logging ' + (debugEnabled ? 'enabled' : 'disabled')
+          + '. Restart the Lollipop child bridge or Homebridge to apply it to running cameras.';
+      } catch (_) {
+        status.textContent = 'Debug logging is ' + (debugEnabled ? 'on' : 'off')
+          + ' for this setup screen, but Homebridge could not save the setting. Change it again to retry saving.';
+      }
+    });
+  });
 
   function showCameras(result) {
     connectedPanel.hidden = false;
@@ -121,7 +156,7 @@
     passwordInput.value = '';
     run(async () => {
       message('Signing in…');
-      const result = await bridge.request('/account/login', { email, password });
+      const result = await request('/account/login', { email, password });
       if (result.requiresOtp) {
         pendingEmail = email;
         loginForm.hidden = true;
@@ -141,7 +176,7 @@
       const code = codeInput.value.trim();
       codeInput.value = '';
       message('Verifying code…');
-      const result = await bridge.request('/account/otp', { email: pendingEmail, code });
+      const result = await request('/account/otp', { email: pendingEmail, code });
       await connected(result, pendingEmail);
     });
   });
@@ -158,14 +193,14 @@
   }
 
   byId('cancel-otp').addEventListener('click', () => run(async () => {
-    await bridge.request('/account/cancel', {});
+    await request('/account/cancel', {});
     showLogin();
   }));
   byId('sign-in-again').addEventListener('click', showLogin);
   byId('save-account').addEventListener('click', () => run(saveAccount));
   byId('refresh-cameras').addEventListener('click', () => run(async () => {
     message('Checking your account cameras…');
-    const result = await bridge.request('/account/status', { email: accountEmail });
+    const result = await request('/account/status', { email: accountEmail });
     showCameras(result);
     message(result.discoveryPending ? 'Camera discovery is still unavailable. Try again shortly.'
       : result.cached ? 'Using saved account information while Lollipop is unavailable.' : '', 'warning');
@@ -179,8 +214,10 @@
   });
 
   bridge.addEventListener('configChanged', event => {
-    if (busy || pendingEmail || !event || !Array.isArray(event.data)) return;
+    if (!event || !Array.isArray(event.data)) return;
     const config = event.data.find(item => item.platform === 'Lollipop');
+    readDebug(config);
+    if (busy || pendingEmail) return;
     const nextEmail = config && config.account && typeof config.account.email === 'string'
       ? config.account.email.trim().toLowerCase() : '';
     if (nextEmail !== accountEmail) {
@@ -195,11 +232,12 @@
   run(async () => {
     const configs = await bridge.getPluginConfig();
     const config = configs.find(item => item.platform === 'Lollipop');
+    readDebug(config);
     if (config && config.account && typeof config.account.email === 'string') {
       emailInput.value = config.account.email;
       accountEmail = config.account.email.trim().toLowerCase();
       message('Checking your saved account…');
-      const result = await bridge.request('/account/status', { email: accountEmail });
+      const result = await request('/account/status', { email: accountEmail });
       showCameras(result);
       message(result.discoveryPending ? 'Signed in. Camera discovery is temporarily unavailable.'
         : result.cached ? 'Using saved account information while Lollipop is unavailable.' : '', 'warning');

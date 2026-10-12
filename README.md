@@ -92,7 +92,7 @@ Existing cached camera/switch identities are reused when they can be matched. Ne
 | `enableCrossingDetectionSensor` | Expose the camera's configured barrier-crossing events. |
 | `enableNoiseSensor` | Expose the camera's configured noise events. |
 | `contactSensors` | Present configured event sensors as contact sensors. |
-| `debug` | Platform-level diagnostic logging; camera URLs and stream keys are redacted. |
+| `debug` | Enable account, discovery, TLS/MQTT, sound-switch, sensor, and FFmpeg diagnostics. Available on the main setup screen; restart the child bridge to apply it to running cameras. |
 
 **HomeKit Secure Video remains unavailable in account mode.** The recovered recording delegate has separate unfinished work; this change restores the account/MQTT/video path and sound control. Event sensors can operate without enabling HKSV.
 
@@ -150,6 +150,16 @@ For older cameras that permit unauthenticated MQTT, configure `name` and `ip` wh
 ## Protocol and troubleshooting
 
 The [MQTT authentication notes](docs/mqtt-authentication.md) record the recovered account requests, credential checks, TLS policy, password derivations, certificate provenance, and control messages. See also the [original firmware issue](https://github.com/senorshaun/homebridge-lollipop/issues/1).
+
+### Debug logging and hardware testing
+
+Turn on **Enable debug logging** at the top of the plugin settings **before signing in**. Setup requests use the setting immediately, including verification-code retries. The checkbox saves the platform's `debug` option; restart the Lollipop child bridge or Homebridge to apply it to running cameras. For a manual configuration, set `"debug": true` beside `"platform": "Lollipop"`.
+
+The logs trace account requests and response structure, session/cache use, camera discovery, certificate downloads and validation, TLS negotiation, MQTT acceptance and subscriptions, reconnects, sound command confirmation, and video/snapshot failures. Each structured record has a sequence number and a fixed event name. Cameras and streams use temporary aliases instead of camera IDs or HomeKit session IDs. Frequent MQTT messages are sampled; payloads are not dumped.
+
+Diagnostics go to the existing Homebridge and Homebridge UI process logs. The plugin does not create a separate log file. Passwords, verification codes, tokens, credential URLs, camera IDs, certificates/private keys, and HomeKit stream keys are redacted or excluded. Review any visible display names and messages from other plugins before sharing an excerpt.
+
+For a physical-camera test, follow the **[hardware testing and debug-log guide](docs/testing.md)**. It includes the test sequence, which log to collect for each failure, and a report template. Current tests use synthetic accounts and a local TLS/MQTT broker; physical-camera and current vendor-service testing are still needed.
 
 - **Email code/sign-in needed:** reopen plugin settings, complete sign-in, and restart the child bridge.
 - **No local address:** ensure the camera is online in the Lollipop app. Discovery will retry automatically.

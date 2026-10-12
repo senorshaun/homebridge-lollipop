@@ -18,6 +18,15 @@
 
   <div id="setup-message" class="alert" role="status" aria-live="polite" hidden></div>
 
+  <div class="setup-section">
+    <label for="debug-logging">
+      <input id="debug-logging" type="checkbox" aria-describedby="debug-help debug-status">
+      Enable debug logging
+    </label>
+    <small id="debug-help" class="setup-note text-muted">Record detailed setup, camera, MQTT, switch, and video diagnostics in the Homebridge and Homebridge UI logs. Sign-in diagnostics change immediately. Restart the Lollipop child bridge or Homebridge to change logging for running cameras. Turn this off after testing.</small>
+    <small id="debug-status" class="setup-note" role="status" aria-live="polite"></small>
+  </div>
+
   <div id="account-connected" class="setup-section" hidden>
     <h5 id="connected-heading">Account connected</h5>
     <p id="camera-summary"></p>

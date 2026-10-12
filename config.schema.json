@@ -233,7 +233,9 @@
       },
       "debug": {
         "title": "Enable debug logging",
-        "type": "boolean"
+        "type": "boolean",
+        "default": false,
+        "description": "Record detailed account setup, camera discovery, MQTT, switch, and video diagnostics in the Homebridge and Homebridge UI logs. Restart the Lollipop child bridge or Homebridge after changing this setting. The sign-in form above applies it immediately to setup requests. Turn off after testing."
       }
     }
   },

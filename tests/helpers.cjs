@@ -6,6 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { builtinModules } = require('node:module');
 const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 
 // Exercise the repository's JavaScript directly. Only external process, network,
 // and HomeKit boundaries are mocked; no dependency installation is necessary.
@@ -134,11 +135,12 @@ function createEnvironment(options = {}) {
       state.spawns.push({ binary, args });
       const child = new EventEmitter();
       child.stdout = new EventEmitter();
-      child.stderr = new EventEmitter();
+      child.stderr = new PassThrough();
       child.stdin = { end() {}, write() {} };
       child.kill = () => true;
       queueMicrotask(() => {
         child.stdout.emit('data', Buffer.from('synthetic-snapshot-data'));
+        child.stderr.end();
         child.emit('close', 0);
       });
       return child;
@@ -149,6 +151,7 @@ function createEnvironment(options = {}) {
   const nativeModules = new Set(builtinModules.map(name => name.replace(/^node:/, '')));
   function loadModule(filename) {
     if (cache.has(filename)) return cache.get(filename).exports;
+    if (path.extname(filename) === '.json') return JSON.parse(fs.readFileSync(filename, 'utf8'));
     const module = { exports: {} };
     cache.set(filename, module);
     const requireFromModule = name => {
@@ -184,7 +187,7 @@ function createEnvironment(options = {}) {
     };
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
       module, exports: module.exports, require: requireFromModule,
-      Buffer, URL, URLSearchParams, process: { env: {}, argv: [] },
+      Buffer, URL, URLSearchParams, process: { env: {}, argv: [], version: process.version, versions: process.versions, platform: process.platform, arch: process.arch },
       ...timers,
     }, { filename });
     return module.exports;

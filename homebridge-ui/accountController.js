@@ -1,5 +1,9 @@
 'use strict';
 
+const { Logger } = require('../lib/logger');
+
+const ROUTES = ['/account/login', '/account/otp', '/account/status', '/account/cancel'];
+
 const MESSAGES = Object.freeze({
   INVALID_INPUT: 'Enter a valid email address and password, or a six-digit verification code.',
   INVALID_ACCOUNT: 'Enter the email address for your Lollipop account.',
@@ -52,9 +56,10 @@ function readEmail(payload) {
  * Every response is constructed explicitly so cloud credentials cannot reach the UI.
  */
 class AccountController {
-  constructor({ storagePath, Account }) {
+  constructor({ storagePath, Account, logger }) {
     this.storagePath = storagePath;
     this.Account = Account || require('../lib/lollipopAccount').LollipopAccount;
+    this.logger = logger || new Logger({ info() {}, warn() {}, error() {}, debug() {} });
     this.pending = null;
     this.busy = false;
   }
@@ -62,11 +67,30 @@ class AccountController {
   async handle(route, payload) {
     if (this.busy) throw new AccountUiError('REQUEST_IN_PROGRESS');
     this.busy = true;
+    // The form sends a boolean on every request. Updating the shared logger also
+    // changes diagnostics for an account retained during email verification.
+    this.logger.debugMode = Boolean(payload && payload.debug === true);
+    this.logger.addSecrets([payload && payload.email, payload && payload.password, payload && payload.code]);
+    const routeName = ROUTES.includes(route) ? route : 'unknown';
+    const started = Date.now();
+    this.logger.diagnostic('setup.request.start', { route: routeName });
+    const finish = result => {
+      this.logger.diagnostic('setup.request.complete', {
+        route: routeName,
+        outcome: result.cancelled ? 'cancelled' : result.requiresOtp ? 'otp_required' : 'authenticated',
+        durationMs: Date.now() - started,
+        cameraCount: result.cameraCount,
+        cached: result.cached,
+        discoveryPending: result.discoveryPending,
+        errorCode: result.discoveryError,
+      });
+      return result;
+    };
     let activeAccount;
     try {
       if (route === '/account/cancel') {
         this.closePending();
-        return { cancelled: true };
+        return finish({ cancelled: true });
       }
 
       const email = readEmail(payload);
@@ -75,14 +99,14 @@ class AccountController {
           throw new AccountUiError('INVALID_INPUT');
         }
         this.closePending();
-        const account = new this.Account({ storagePath: this.storagePath, email });
+        const account = this.createAccount(email);
         activeAccount = account;
         const result = await account.signIn(payload.password);
         if (result && result.requiresOtp === true) {
           this.pending = { email, account };
-          return { requiresOtp: true };
+          return finish({ requiresOtp: true });
         }
-        return await this.complete(account, result);
+        return finish(await this.complete(account, result));
       }
 
       if (route === '/account/otp') {
@@ -102,22 +126,35 @@ class AccountController {
         }
         if (!result || result.authenticated !== true) throw new AccountUiError('INVALID_RESPONSE');
         this.pending = null;
-        return await this.complete(account, result);
+        return finish(await this.complete(account, result));
       }
 
       if (route === '/account/status') {
-        const account = new this.Account({ storagePath: this.storagePath, email });
+        const account = this.createAccount(email);
         activeAccount = account;
-        return await this.complete(account, await account.authenticate());
+        return finish(await this.complete(account, await account.authenticate()));
       }
 
       throw new AccountUiError('INVALID_INPUT');
     } catch (error) {
-      throw safeError(error);
+      const safe = safeError(error);
+      this.logger.diagnostic('setup.request.failed', {
+        route: routeName, errorCode: safe.code, durationMs: Date.now() - started,
+      });
+      throw safe;
     } finally {
       if (activeAccount && (!this.pending || this.pending.account !== activeAccount)) this.closeAccount(activeAccount);
       this.busy = false;
     }
+  }
+
+  createAccount(email) {
+    return new this.Account({
+      storagePath: this.storagePath,
+      email,
+      diagnostics: (event, fields) => this.logger.diagnostic(event, fields),
+      registerSecrets: values => this.logger.addSecrets(values),
+    });
   }
 
   closeAccount(account) {

@@ -1,6 +1,7 @@
 "use strict";
 const logger = require("./lib/logger");
 let Lollipop = require("./lib/lollipop");
+const { resolveCameraConnection } = require('./lib/cameraConnection');
 const PLUGIN_NAME = 'homebridge-lollipop';
 const PLATFORM_NAME = 'Lollipop';
 
@@ -11,7 +12,7 @@ class LollipopPlatform {
     constructor(log, config, api) {
         this.accessories = [];
         this.api = api;
-        this.config = config;
+        this.config = config || {};
         this.log = new logger.Logger(log, this.config.debug);
         if (!config || !config.lollipops || config.lollipops.length == 0) {
             this.log.warn("Ignoring Lollipop Platform setup because no lollipops are configured");
@@ -42,9 +43,17 @@ class LollipopPlatform {
             // error handle invalid setups
             if (!lollipopConfig.name) {
                 this.log.error('One of your lollipops has no name configured. This lollipop will be skipped.');
-            } else if (!lollipopConfig.ip) {
-                this.log.error('No IP address specified. This lollipop will be skipped.', lollipopConfig.name);
+            } else if (!lollipopConfig.ip && !lollipopConfig.rtspUrl) {
+                this.log.error('No authenticated RTSP URL or camera IP address specified. This lollipop will be skipped.', lollipopConfig.name);
             } else {
+                if (lollipopConfig.rtspUrl !== undefined && lollipopConfig.rtspUrl !== '') {
+                    try {
+                        resolveCameraConnection(lollipopConfig);
+                    } catch (error) {
+                        this.log.error('Camera configuration invalid: ' + error.message, lollipopConfig.name);
+                        return;
+                    }
+                }
                 // lollipop setup
                 // create identifier
                 var uuid = this.api.hap.uuid.generate(lollipopConfig.name + ' Camera');

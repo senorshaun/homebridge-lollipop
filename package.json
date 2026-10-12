@@ -28,5 +28,8 @@
     "ffmpeg-for-homebridge": "^0.1.4",
     "mqtt": "^4.2.8",
     "pick-port": "^1.0.0"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs"
   }
 }

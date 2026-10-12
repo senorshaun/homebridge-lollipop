@@ -97,6 +97,12 @@ seconds and stops with an actionable error if it fails. The older `pairingID`
 setting skips only the discovery step in this MQTT mode. Use `cameraId` for the
 authenticated video mode above.
 
+The newer MQTT authentication flow has been recovered from the Android app: it
+requires an account session, a downloaded client certificate/private key, and a
+separate MQTT password. This draft does not yet perform that provisioning. See
+the [MQTT authentication findings](docs/mqtt-authentication.md) for the verified
+protocol, certificate roles, and remaining hardware checks.
+
 - `platform`: __(Required)__ Must be set to `Lollipop`
 - `debug`: _(Boolean)_ When set to `true`, lots of data will be populated in to the logs. Its recommended you only set this temporarily
 - `lollipops`: _(Array of objects)_ It's likely you will only have one camera object, but multiple are allowed

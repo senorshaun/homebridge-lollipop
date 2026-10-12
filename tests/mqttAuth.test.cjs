@@ -35,7 +35,7 @@ before(() => {
         run(['req', '-new', ...args, '-nodes', '-keyout', name + '.key', '-out', name + '.csr', '-subj', '/CN=' + name]);
         fs.writeFileSync(path.join(directory, name + '.ext'),
             'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n' +
-            'extendedKeyUsage=' + purpose + '\n' + (purpose === 'serverAuth' ? 'subjectAltName=IP:127.0.0.1,DNS:localhost\n' : ''));
+            'extendedKeyUsage=' + purpose + '\n' + (purpose === 'serverAuth' ? 'subjectAltName=IP:127.0.0.1,IP:::1,DNS:localhost\n' : ''));
         run(['x509', '-req', '-in', name + '.csr', '-CA', ca + '.crt', '-CAkey', ca + '.key',
             '-CAcreateserial', '-out', name + '.crt', '-days', '1', '-sha256', '-extfile', name + '.ext']);
     };
@@ -165,7 +165,7 @@ function mqttString(value) {
     return Buffer.concat([length, bytes]);
 }
 
-async function loopbackSession(options) {
+async function loopbackSession(options, { host = '127.0.0.1', listenHost = '127.0.0.1' } = {}) {
     const report = { accepted: false, connected: false, subscribed: false, received: false, clientErrors: [], commands: [] };
     const sockets = new Set();
     const server = tls.createServer({
@@ -173,6 +173,7 @@ async function loopbackSession(options) {
         requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.2'
     }, socket => {
         report.accepted = socket.authorized;
+        report.servername = socket.servername;
         socket.on('error', () => {});
         let buffer = Buffer.alloc(0);
         socket.on('data', chunk => {
@@ -201,8 +202,8 @@ async function loopbackSession(options) {
                         position += size;
                         return value;
                     };
-                    readString(); // protocol name
-                    position++; // protocol version
+                    report.protocolName = readString();
+                    report.protocolVersion = data[position++];
                     const flags = data[position++];
                     position += 2; // keepalive
                     readString(); // generated client ID
@@ -236,7 +237,7 @@ async function loopbackSession(options) {
     server.on('tlsClientError', () => {});
     await new Promise((resolve, reject) => {
         server.once('error', reject);
-        server.listen(0, '127.0.0.1', resolve);
+        server.listen(0, listenHost, resolve);
     });
     let client;
     let timer;
@@ -253,13 +254,15 @@ async function loopbackSession(options) {
         await new Promise(resolve => {
             settle = resolve;
             timer = setTimeout(() => { report.timeout = true; finish(); }, 4000);
-            client = mqtt.connect('mqtts://127.0.0.1:' + server.address().port, {
-                ...options, reconnectPeriod: 0, connectTimeout: 3000, queueQoSZero: false
+            const urlHost = host.includes(':') ? '[' + host + ']' : host;
+            client = mqtt.connect('mqtts://' + urlHost + ':' + server.address().port, {
+                ...options, protocolVersion: 4, reconnectPeriod: 0, connectTimeout: 3000, queueQoSZero: false
             });
             client.on('error', error => { report.clientErrors.push(error.code); finish(); });
             client.on('close', finish);
             client.on('connect', () => {
                 report.connected = true;
+                report.serverVerified = client.stream.authorized;
                 client.subscribe('synthetic-pairing-id/musicStatus/return', (error, granted) => {
                     report.subscribed = !error && granted[0].qos === 0;
                 });
@@ -281,7 +284,7 @@ async function loopbackSession(options) {
 
 const integration = { skip: mqtt ? false : 'Install the mqtt runtime dependency to run real TLS/MQTT tests' };
 
-test('real mTLS plus MQTT authentication, subscription, status delivery, and control publish succeed', integration, async () => {
+test('real IPv4 mTLS omits IP SNI and preserves MQTT 3.1.1 authentication, status, and control', integration, async () => {
     const options = createAuthenticatedMqttOptions(credentials({ ca: fixtures.ca }));
     const report = await loopbackSession(options);
     assert.equal(report.accepted, true);
@@ -289,9 +292,46 @@ test('real mTLS plus MQTT authentication, subscription, status delivery, and con
     assert.equal(report.connected, true);
     assert.equal(report.subscribed, true);
     assert.equal(report.received, true);
+    assert.equal(report.serverVerified, true);
+    assert.ok(!report.servername, 'IP addresses must not be sent as TLS ServerName (Node 26 rejects them)');
+    assert.equal(report.protocolName, 'MQTT');
+    assert.equal(report.protocolVersion, 4);
     assert.equal(report.commands[0].topic, 'synthetic-pairing-id/controlMusic');
     assert.equal(JSON.parse(report.commands[0].payload).params.playStatus, 'play');
     assert.deepEqual(report.clientErrors, []);
+});
+
+test('real DNS mTLS sends the hostname as SNI and retains certificate verification', integration, async () => {
+    const options = createAuthenticatedMqttOptions(credentials({ ca: fixtures.ca }));
+    const report = await loopbackSession({ ...options, family: 4 }, { host: 'localhost' });
+    assert.equal(report.accepted, true);
+    assert.equal(report.serverVerified, true);
+    assert.equal(report.servername, 'localhost');
+    assert.equal(report.authenticated, true);
+    assert.equal(report.received, true);
+    assert.equal(report.protocolVersion, 4);
+    assert.deepEqual(report.clientErrors, []);
+});
+
+test('real IPv6 mTLS omits IP SNI and retains the camera app trust policy', integration, async () => {
+    // Exercise the production hostname policy with an isolated trust anchor.
+    // Node 22.23.3's default hostname checker incorrectly IDNA-normalizes IPv6
+    // literals; the camera app policy does not use that checker. This case
+    // verifies mutual CA authentication, not an IPv6 hostname/SAN match.
+    const options = { ...createAuthenticatedMqttOptions(credentials()), ca: fixtures.ca };
+    const report = await loopbackSession(options, { host: '::1', listenHost: '::1' });
+    assert.equal(report.accepted, true, 'IPv6 TLS broker result: ' + JSON.stringify(report));
+    assert.equal(report.serverVerified, true);
+    assert.ok(!report.servername);
+    assert.equal(report.authenticated, true);
+    assert.equal(report.received, true);
+    assert.equal(report.protocolVersion, 4);
+    assert.deepEqual(report.clientErrors, []);
+
+    const untrusted = await loopbackSession({ ...options, ca: fixtures.otherCa }, { host: '::1', listenHost: '::1' });
+    assert.equal(untrusted.connected, false, 'The IPv6 app policy must still reject an untrusted server chain');
+    assert.equal(untrusted.commands.length, 0);
+    assert.ok(untrusted.clientErrors.length > 0);
 });
 
 test('real mTLS rejects an otherwise matching identity issued by a different CA', integration, async () => {
@@ -463,6 +503,7 @@ test('real Lollipop and HomeKit sound switch use authenticated MQTT and wait for
                     assert.equal(options.rejectUnauthorized, true);
                     assert.equal(options.minVersion, 'TLSv1.2');
                     assert.equal(options.queueQoSZero, false);
+                    assert.equal(options.protocolVersion, 4, 'The MQTT client upgrade must retain the camera wire protocol');
                     assert.equal(options.username, 'lollipop');
                     assert.equal(options.password, '25696c4c1b836b64532148fad72be804');
                     // Only replace the broker's port for this loopback test.

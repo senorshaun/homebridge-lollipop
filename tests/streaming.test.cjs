@@ -201,7 +201,8 @@ test('return-audio process has no video startup deadline and its failure stops t
     assert.deepEqual(f.forced, ['test-session']);
 });
 
-function streamingFixture({ config = {}, globalDebug = false, realLogger = false, pickPort } = {}) {
+function streamingFixture({ config = {}, globalDebug = false, realLogger = false, pickPort, bindError, processError,
+    processErrorAt = 1, reentrantStop = false } = {}) {
     const timers = fakeTimers();
     const events = new Map();
     const api = {
@@ -212,6 +213,7 @@ function streamingFixture({ config = {}, globalDebug = false, realLogger = false
     const log = testLogger(logs, config.debug === true || globalDebug, realLogger);
     const spawned = [];
     const processes = [];
+    let processAttempts = 0;
     const sockets = [];
     const { StreamingDelegate } = loadModule('lib/streamingDelegate.js', {
         child_process: { spawn(executable, args) {
@@ -221,7 +223,7 @@ function streamingFixture({ config = {}, globalDebug = false, realLogger = false
         } },
         dgram: { createSocket() {
             const socket = new EventEmitter();
-            socket.bind = port => { socket.boundPort = port; };
+            socket.bind = port => { if (bindError) throw bindError; socket.boundPort = port; };
             socket.close = () => { socket.closed = true; };
             sockets.push(socket);
             return socket;
@@ -229,8 +231,14 @@ function streamingFixture({ config = {}, globalDebug = false, realLogger = false
         'ffmpeg-for-homebridge': '/test/ffmpeg',
         'pick-port': pickPort || (async () => 30000),
         './ffmpeg': { allocateStreamReference, FfmpegProcess: class {
-            constructor(...args) { this.args = args; this.stdin = new PassThrough(); processes.push(this); }
-            stop() { this.stopped = true; }
+            constructor(...args) {
+                if (processError && ++processAttempts === processErrorAt) throw processError;
+                this.args = args; this.stdin = new PassThrough(); processes.push(this);
+            }
+            stop() {
+                this.stopped = true;
+                if (reentrantStop && typeof this.args[7] === 'function') this.args[7](new Error('Synthetic startup cancellation'));
+            }
         } },
         './recordingDelegate': { PREBUFFER_LENGTH: 4000, FRAGMENTS_LENGTH: 4000 }
     }, timers);
@@ -380,12 +388,73 @@ test('stream preparation, selected media settings and RTCP timeout share a gener
     assert.equal(f.delegate.ongoingSessions.size, 0);
 });
 
-test('failed local port reservation records its safe error and discards the diagnostic alias', async () => {
+test('failed local port reservation calls HomeKit back once, records its safe error and discards the diagnostic alias', async () => {
     const error = Object.assign(new Error('private port-selection details'), { code: 'EADDRINUSE' });
     const f = streamingFixture({ globalDebug: true, realLogger: true, pickPort: async () => { throw error; } });
-    await assert.rejects(f.delegate.prepareStream(streamRequest(), () => {}), caught => caught === error);
+    const callbacks = [];
+    await f.delegate.prepareStream(streamRequest(), failure => callbacks.push(failure));
+    assert.deepEqual(callbacks, [error]);
     assert.match(diagnosticText(f), /phase=failed.*stage=prepare.*errorCode=EADDRINUSE/);
     assert.doesNotMatch(diagnosticText(f), /private port-selection details|private-homekit/);
+    assert.equal(f.delegate.streamReferences.size, 0);
+    assert.equal(f.delegate.pendingSessions.size, 0);
+});
+
+test('HomeKit start reports socket and FFmpeg setup exceptions without leaking a session', async () => {
+    for (const failure of ['bindError', 'processError']) {
+        const error = Object.assign(new Error('Synthetic stream setup failure'), { code: 'EACCES' });
+        const f = streamingFixture({ [failure]: error });
+        const request = streamRequest();
+        await f.delegate.prepareStream(request, setupError => assert.equal(setupError, undefined));
+        const callbacks = [];
+        f.delegate.handleStreamRequest(request, startError => callbacks.push(startError));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(callbacks, [error]);
+        assert.equal(f.sockets[0].closed, true);
+        assert.equal(f.delegate.pendingSessions.size, 0);
+        assert.equal(f.delegate.ongoingSessions.size, 0);
+        assert.equal(f.delegate.streamReferences.size, 0);
+        assert.equal(f.timers.pending.size, 0);
+    }
+});
+
+test('stopping while ports are being reserved cannot resurrect a prepared stream', async () => {
+    let reserve;
+    let reservations = 0;
+    const f = streamingFixture({ pickPort: () => {
+        if (++reservations === 1) return new Promise(resolve => { reserve = resolve; });
+        return Promise.resolve(30002);
+    } });
+    const request = streamRequest();
+    const callbacks = [];
+    const preparing = f.delegate.prepareStream(request, error => callbacks.push(error));
+    f.delegate.stopStream(request.sessionID);
+    reserve(30000);
+    await preparing;
+    assert.equal(callbacks.length, 1);
+    assert.match(callbacks[0].message, /cancelled/);
+    assert.equal(f.delegate.pendingSessions.size, 0);
+    assert.equal(f.delegate.streamReferences.size, 0);
+});
+
+test('partial stream setup failure settles once when HomeKit and FFmpeg reenter teardown', async () => {
+    const error = Object.assign(new Error('Synthetic return-audio spawn failure'), { code: 'ENOENT' });
+    const f = streamingFixture({ config: { returnAudioTarget: '-f null -' }, processError: error,
+        processErrorAt: 2, reentrantStop: true });
+    const request = streamRequest();
+    await f.delegate.prepareStream(request, setupError => assert.equal(setupError, undefined));
+    const callbacks = [];
+    f.delegate.handleStreamRequest(request, startError => {
+        callbacks.push(startError);
+        f.delegate.stopStream(request.sessionID);
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(callbacks, [error]);
+    assert.equal(f.processes.length, 1);
+    assert.equal(f.processes[0].stopped, true);
+    assert.equal(f.sockets[0].closed, true);
+    assert.equal(f.delegate.pendingSessions.size, 0);
+    assert.equal(f.delegate.ongoingSessions.size, 0);
     assert.equal(f.delegate.streamReferences.size, 0);
 });
 

@@ -2,7 +2,9 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { fork } = require('node:child_process');
 const vm = require('node:vm');
 const { test } = require('node:test');
 const { AccountController } = require('../homebridge-ui/accountController');
@@ -472,4 +474,128 @@ test('a debug-setting save error is safe and still applies to the next setup req
   await settle();
   assert.equal(browser.state.requests[0].body.debug, true);
   assert.equal(browser.state.saves, 0);
+});
+
+test('the settings server loads the installed ESM UI utility and handles private account flows over real IPC', { timeout: 20000 }, async t => {
+  const utility = require('@homebridge/plugin-ui-utils/package.json');
+  assert.equal(utility.type, 'module', 'This integration test must use the installed ESM dependency');
+
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'lollipop-ui-ipc-'));
+  const preload = path.join(temporary, 'account-fixture.cjs');
+  const accountModule = require.resolve('../lib/lollipopAccount');
+  // Replace only the cloud-facing account dependency. The real settings entry
+  // point, account controller, redacting logger and UI IPC library all run in a
+  // genuine forked process, as they do when Homebridge opens plugin settings.
+  fs.writeFileSync(preload, `
+    'use strict';
+    for (const protocol of ['node:http', 'node:https']) {
+      const transport = require(protocol);
+      transport.request = transport.get = () => { throw new Error('Network requests are forbidden in UI tests'); };
+    }
+    class SyntheticAccount {
+      constructor(options) {
+        if (options.storagePath !== ${JSON.stringify(path.join(temporary, 'lollipop'))}) throw new Error('Incorrect storage path');
+        this.options = options;
+        options.registerSecrets(['private-camera-id', 'private-session-token']);
+      }
+      async signIn(password) {
+        if (password !== ${JSON.stringify(secret)}) throw new Error('Incorrect test password');
+        this.options.diagnostics('account.sign_in', { phase: 'start', hasPassword: true });
+        return { requiresOtp: true, token: 'private-session-token' };
+      }
+      async verifyOtp(code) {
+        this.options.diagnostics('account.sign_in', { phase: 'start', hasPassword: false });
+        if (code !== '123456') {
+          throw Object.assign(new Error(${JSON.stringify(secret)} + ' private-session-token'), { code: 'INVALID_CREDENTIALS' });
+        }
+        return { authenticated: true, sessionToken: 'private-session-token' };
+      }
+      async authenticate() { return { authenticated: true, cached: true }; }
+      async listCameras() { return [{ name: 'Nursery', cameraId: 'private-camera-id', ip: '192.0.2.1' }]; }
+      close() {}
+    }
+    require.cache[${JSON.stringify(accountModule)}] = {
+      id: ${JSON.stringify(accountModule)}, filename: ${JSON.stringify(accountModule)}, loaded: true,
+      exports: { LollipopAccount: SyntheticAccount },
+    };
+  `);
+
+  const child = fork(path.join(__dirname, '../homebridge-ui/server.js'), [], {
+    execArgv: ['--require', preload],
+    env: {
+      ...process.env,
+      HOMEBRIDGE_STORAGE_PATH: temporary,
+      HOMEBRIDGE_CONFIG_PATH: path.join(temporary, 'config.json'),
+      HOMEBRIDGE_UI_VERSION: 'test',
+    },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  let logs = '';
+  child.stdout.on('data', chunk => { logs += chunk.toString(); });
+  child.stderr.on('data', chunk => { logs += chunk.toString(); });
+  const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+    fs.rmSync(temporary, { recursive: true, force: true });
+  });
+
+  const nextMessage = matches => new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => finish(new Error('UI IPC response timed out: ' + logs)), 5000);
+    const onMessage = message => { if (matches(message)) finish(null, message); };
+    const onExit = () => finish(new Error('UI server exited before its response: ' + logs));
+    const onError = error => finish(error);
+    const finish = (error, value) => {
+      clearTimeout(timeout);
+      child.removeListener('message', onMessage);
+      child.removeListener('exit', onExit);
+      child.removeListener('error', onError);
+      if (error) reject(error); else resolve(value);
+    };
+    child.on('message', onMessage);
+    child.once('exit', onExit);
+    child.once('error', onError);
+  });
+  const ready = await nextMessage(message => message.action === 'ready');
+  assert.deepEqual(ready.payload, { server: true });
+  let requestId = 0;
+  const responses = [];
+  const request = async (route, body) => {
+    const id = String(++requestId);
+    const response = nextMessage(message => message.action === 'response' && message.payload.requestId === id);
+    child.send({ action: 'request', requestId: id, path: route, body });
+    const message = await response;
+    responses.push(message);
+    return message.payload;
+  };
+
+  const invalid = await request('/account/login', { email, password: '', debug: false });
+  assert.equal(invalid.success, false);
+  assert.equal(invalid.data.error.code, 'INVALID_INPUT');
+  const login = await request('/account/login', { email, password: secret, debug: true });
+  assert.equal(login.success, true);
+  assert.deepEqual(login.data, { requiresOtp: true });
+  const rejectedCode = await request('/account/otp', { email, code: '000000', debug: false });
+  assert.equal(rejectedCode.success, false);
+  assert.equal(rejectedCode.data.error.code, 'INVALID_OTP');
+  const verified = await request('/account/otp', { email, code: '123456', debug: true });
+  assert.equal(verified.success, true);
+  assert.deepEqual(verified.data, {
+    authenticated: true, cached: false, cameraCount: 1, cameras: [{ name: 'Nursery' }],
+  });
+  const status = await request('/account/status', { email, debug: false });
+  assert.equal(status.success, true);
+  assert.equal(status.data.cached, true);
+  const cancelled = await request('/account/cancel', { debug: true });
+  assert.equal(cancelled.success, true);
+  assert.deepEqual(cancelled.data, { cancelled: true });
+
+  child.disconnect();
+  const exit = await exited;
+  assert.equal(exit.signal, 'SIGTERM', 'The current UI utility must shut down when settings close');
+  assert.match(logs, /account\.sign_in/);
+  assert.equal((logs.match(/setup\.request\.start/g) || []).length, 3);
+  assert.equal((logs.match(/setup\.request\.complete/g) || []).length, 3);
+  assert.doesNotMatch(logs, /setup\.request\.failed/, 'Disabled request diagnostics must remain quiet');
+  assert.doesNotMatch(logs + JSON.stringify(responses), /owner@example\.com|synthetic-password|private-camera-id|private-session-token|192\.0\.2\.1|123456|000000/);
 });

@@ -10,6 +10,21 @@ Install this plugin through Homebridge. [Homebridge Config UI X](https://github.
 
 Development changes are on `fix/authenticated-rtsp` in [draft PR #2](https://github.com/senorshaun/homebridge-lollipop/pull/2). They are not an npm release.
 
+### Homebridge and Node.js requirements
+
+This branch targets **Homebridge 2.x**. The recommended test setup is **Homebridge 2.4.0 with Node.js 24.21.0 LTS**. The supported Node.js ranges are `^22.12.0 || ^24.0.0 || ^26.0.0`; use the latest patch release in the chosen supported major.
+
+| Component | Version used by this branch | Purpose |
+| --- | --- | --- |
+| [Homebridge](https://github.com/homebridge/homebridge/blob/latest/package.json) | `2.4.0` for development/tests; runtime compatibility `^2.0.0` | Test against the current stable 2.x API while accepting compatible 2.x installations. |
+| [Node.js LTS](https://nodejs.org/en/blog/release/v24.21.0) | `24.21.0`, also recorded in `.nvmrc` | Recommended stable LTS runtime for testers and development. |
+| [Plugin UI utilities](https://github.com/homebridge/plugin-ui-utils/releases/tag/v2.2.6) | `^2.2.6`, locked to `2.2.6` | Load the current ESM settings-server utility through an asynchronous import. |
+| [MQTT.js](https://github.com/mqttjs/MQTT.js/releases/tag/v5.16.0) | `^5.16.0`, locked to `5.16.0` | Support local-IP TLS connections on current Node.js releases. |
+
+These stable versions were verified on October 12, 2026. Node 26 is supported by current Homebridge and by this plugin's engine range; it is still the Node.js Current release line at that date. Node 24 LTS is the recommended baseline. `engines` expresses compatibility; updating this plugin does not install or upgrade Homebridge or Node.js on the host. Homebridge is a development dependency only, so the plugin uses the host's injected Homebridge/HAP API in production.
+
+The MQTT client upgrade fixes the previous client's use of IP addresses as TLS server names, which Node 26 rejects. MQTT.js 5 continues to use the camera's MQTT 3.1.1 protocol, and the account-mode certificate, private-CA, and authentication checks remain enabled.
+
 ## Automatic account setup
 
 1. Open the Lollipop plugin's settings in Homebridge Config UI X.
@@ -169,7 +184,9 @@ For a physical-camera test, follow the **[hardware testing and debug-log guide](
 
 ## Development checks
 
-Run `npm install`, then `npm test` with Node.js 18 or newer. The tests exercise account/OTP responses, private storage, cloud-outage and revocation handling, real certificate/key validation, Homebridge integration, switch confirmation, MQTT reconnects, log redaction, and media lifecycle behavior. The local TLS/MQTT integration tests require the installed `mqtt` dependency and an `openssl` executable to generate temporary synthetic certificates.
+Use a supported Node.js version (`nvm use` selects the recommended LTS version when nvm is installed), then run `npm ci` and `npm test`. The lockfile installs the stable Homebridge development dependency and ESM UI utility along with the runtime dependencies. The tests exercise account/OTP responses, private storage, cloud-outage and revocation handling, real certificate/key validation, Homebridge integration, switch confirmation, MQTT reconnects, log redaction, and media lifecycle behavior. The local TLS/MQTT integration tests require the installed `mqtt` dependency and an `openssl` executable to generate temporary synthetic certificates.
+
+Compatibility tests load the plugin through Homebridge's real plugin loader, construct real HAP camera/switch/sensor services, and run the settings backend through the installed UI utility's subprocess/IPC protocol. Camera preparation and stream-start failures must reach Homebridge's callbacks exactly once and release their session resources. These checks require development dependencies, so use `npm ci` without `--omit=dev` when running tests.
 
 The app protocol is supported by signed Android versions 3.11.11 (June 2023) and 4.5.2 (February 2025). Tests use account fixtures, synthetic identities, and local brokers. They do not establish acceptance by a physical camera, current vendor account service, or a HomeKit hub.
 

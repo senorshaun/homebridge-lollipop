@@ -247,6 +247,21 @@ These controlled tests establish client behavior and the diagnostic failure.
 They do not establish that any simulated broker reproduces the actual camera's
 full authorization policy.
 
+### Current Node.js compatibility
+
+The Homebridge 2 branch uses MQTT.js 5.16.0. The old 4.2.8 TLS adapter always
+copied the connection host into TLS `servername`, including IP addresses;
+current Node.js rejects that invalid SNI value. The updated adapter sends SNI
+for DNS names and omits it for IP addresses. The plugin explicitly selects
+MQTT 3.1.1 (`protocolVersion: 4`) in both connection paths, preserving the
+camera's protocol while updating the client library.
+
+Local regression tests cover IPv4, IPv6, and DNS connections with mutual TLS,
+server-chain verification, MQTT login, subscriptions, and sound control. They
+also verify rejection of an untrusted server, a client identity from the wrong
+CA, and an incorrect MQTT password. The account-mode trust and hostname policy
+described above is unchanged.
+
 ## Evidence and source map
 
 Downloaded APKs were inspected as data; their application code was not executed.
@@ -279,6 +294,8 @@ External references:
 - [Independent account SDK camera query](https://github.com/altyaper/lollipop-camera-sdk/blob/main/src/client.ts).
 - [MQTT.js 4.2.8 TLS adapter](https://github.com/mqttjs/MQTT.js/blob/v4.2.8/lib/connect/tls.js).
 - [MQTT.js 4.2.8 client](https://github.com/mqttjs/MQTT.js/blob/v4.2.8/lib/client.js).
+- [MQTT.js 5.16.0 TLS adapter](https://github.com/mqttjs/MQTT.js/blob/v5.16.0/src/lib/connect/tls.ts).
+- [Node.js TLS server-name requirement (DEP0123)](https://nodejs.org/api/deprecations.html#dep0123-setting-the-tls-servername-to-an-ip-address).
 - [Original firmware issue and author's 2023 observations](https://github.com/senorshaun/homebridge-lollipop/issues/1).
 - [Home Assistant discussion distinguishing 2021 firmware success from the 2023 authentication change](https://community.home-assistant.io/t/mosquitto-get-data-from-another-mqtt-broker-lollipop-camera/424547?page=2).
 

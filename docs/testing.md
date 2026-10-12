@@ -6,6 +6,8 @@ This guide is for testing the account setup and authenticated MQTT work in [draf
 
 Use the draft branch in the Homebridge instance being tested. The published npm package does not include these changes. Record the branch's commit when reporting results: the package version alone is not enough to identify a draft build.
 
+Use **Homebridge 2.x**, preferably the current stable **2.4.0**, with **Node.js 24.21.0 LTS** as the recommended runtime. The plugin also accepts supported Node 22 (22.12 or newer) and Node 26 releases. The included settings utility is `@homebridge/plugin-ui-utils` 2.2.6. Version requirements and source links are in the [README](../README.md#homebridge-and-nodejs-requirements). Updating the plugin does not upgrade Homebridge or Node.js itself; check the actual runtime versions in Homebridge UI before testing.
+
 Have the camera working in the Lollipop app and connected to a network reachable from Homebridge. Account discovery supplies the camera ID and local address automatically, but video and MQTT still connect directly over the local network. Use the account that owns the camera.
 
 In the Lollipop app, select a sound or track for the sound-machine switch to resume. The HomeKit switch supports resume/repeat and pause; it does not choose a track or set the volume. HKSV is not part of this test and remains disabled in account mode.

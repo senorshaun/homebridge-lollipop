@@ -35,6 +35,7 @@
     INVALID_RESPONSE: 'Lollipop returned an unexpected response. Try again or check the plugin documentation.',
     STORAGE_ERROR: 'Homebridge could not save or read the session. Check its storage permissions.',
     REQUEST_IN_PROGRESS: 'Wait for the current request to finish.',
+    CONFIG_CONFLICT: 'Lollipop has conflicting account or child-bridge entries. Back up config.json and consolidate those entries before saving. No configuration was changed.',
   };
 
   function message(text, kind) {
@@ -45,7 +46,7 @@
   }
 
   function report(error) {
-    const code = error && error.error && error.error.code;
+    const code = error && ((error.error && error.error.code) || error.code);
     message(messages[code] || 'Unable to complete setup. Try again.', 'danger');
   }
 
@@ -89,7 +90,11 @@
         await bridge.savePluginConfig();
         status.textContent = 'Debug logging ' + (debugEnabled ? 'enabled' : 'disabled')
           + '. Restart the Lollipop child bridge or Homebridge to apply it to running cameras.';
-      } catch (_) {
+      } catch (error) {
+        if (error && error.code === 'CONFIG_CONFLICT') {
+          status.textContent = messages.CONFIG_CONFLICT;
+          return;
+        }
         status.textContent = 'Debug logging is ' + (debugEnabled ? 'on' : 'off')
           + ' for this setup screen, but Homebridge could not save the setting. Change it again to retry saving.';
       }
@@ -126,7 +131,8 @@
       await bridge.savePluginConfig();
     } catch (error) {
       byId('save-account').hidden = false;
-      message('Signed in, but Homebridge could not save the configuration. Retry saving your account.', 'danger');
+      message(error && error.code === 'CONFIG_CONFLICT' ? messages.CONFIG_CONFLICT
+        : 'Signed in, but Homebridge could not save the configuration. Retry saving your account.', 'danger');
       return;
     }
     byId('save-account').hidden = true;

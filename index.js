@@ -40,12 +40,35 @@ class LollipopPlatform {
         this.api.on('didFinishLaunching', () => {
             if (!this.disabled && !this.stopped) this.didFinishLaunching();
         });
-        this.api.on('shutdown', () => {
-            this.stopped = true;
-            emitDiagnostic(this.log, 'platform.refresh', { phase: 'cancelled', reason: 'shutdown' });
-            clearTimeout(this.refreshTimer);
-            if (this.account && this.account.close) this.account.close();
-        });
+        this.api.on('shutdown', () => this.shutdown());
+    }
+
+    shutdown() {
+        if (this.stopped) return;
+        this.stopped = true;
+        clearTimeout(this.refreshTimer);
+        this.refreshTimer = undefined;
+        emitDiagnostic(this.log, 'platform.shutdown', { phase: 'start', cameraCount: this.cameras.size });
+        // Reuse each camera's existing idempotent MQTT/stream/sensor cleanup.
+        // One failing camera must not prevent another from shutting down.
+        let failed = false;
+        for (const camera of this.cameras.values()) {
+            try { camera.shutdown(); }
+            catch (_) {
+                failed = true;
+                this.log.error('A Lollipop camera could not complete shutdown.');
+            }
+        }
+        this.cameras.clear();
+        if (this.account && this.account.close) {
+            try { this.account.close(); }
+            catch (_) {
+                failed = true;
+                this.log.error('Could not close the Lollipop account service.');
+            }
+        }
+        // Leave cached accessories and pairing identities intact for restart.
+        emitDiagnostic(this.log, 'platform.shutdown', { phase: failed ? 'failed' : 'complete' });
     }
 
     didFinishLaunching() {
@@ -127,6 +150,7 @@ class LollipopPlatform {
                 });
             }
             await this.account.authenticate();
+            if (this.stopped) return;
             const records = await this.account.listCameras();
             if (this.stopped) return;
             if (!Array.isArray(records)) throw new Error('Lollipop returned an invalid camera list.');
@@ -179,6 +203,7 @@ class LollipopPlatform {
                     credentials = await this.account.getMqttCredentials(record.cameraId, { force: forceCredentialId === record.cameraId });
                     createAuthenticatedMqttOptions({ cameraId: record.cameraId, ...credentials });
                 } catch (error) {
+                    if (this.stopped) return;
                     credentials = undefined;
                     emitDiagnostic(this.log, 'platform.camera', {
                         phase: 'failed', operation: 'credentials', cameraRef, code: error && error.code
@@ -220,6 +245,7 @@ class LollipopPlatform {
                 source: this.account.lastCameraSource === 'cache' ? 'cache' : 'cloud', durationMs: Date.now() - started
             });
         } catch (error) {
+            if (this.stopped) return;
             const code = error && error.code;
             emitDiagnostic(this.log, 'platform.refresh', { phase: 'failed', reason, code, durationMs: Date.now() - started });
             retry = !['OTP_REQUIRED', 'SIGN_IN_REQUIRED', 'INVALID_CREDENTIALS', 'INVALID_SESSION', 'INVALID_ACCOUNT', 'ACCESS_DENIED'].includes(code);

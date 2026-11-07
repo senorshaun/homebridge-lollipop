@@ -185,6 +185,7 @@ class AccountController {
       return {
         authenticated: true,
         cached: result.cached === true,
+        sessionCached: result.cached === true,
         discoveryPending: true,
         discoveryError: safe.code,
       };
@@ -192,6 +193,7 @@ class AccountController {
     return {
       authenticated: true,
       cached: result.cached === true || account.usingCachedCameras === true,
+      sessionCached: result.cached === true,
       cameraCount: cameras.length,
       cameras: cameras.map(camera => ({
         name: camera && typeof camera.name === 'string'

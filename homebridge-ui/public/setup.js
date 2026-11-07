@@ -106,5 +106,38 @@
     status.textContent = '';
     credentials(typeof config.account?.email === 'string' ? config.account.email : '');
   }));
+  async function refreshAccountStatus() {
+    try {
+      const { config } = await configuration();
+      const email = config.account?.email;
+      if (typeof email !== 'string' || !email.trim()) {
+        status.textContent = 'Sign in to connect your Lollipop account.';
+        button.textContent = 'Sign in';
+        return;
+      }
+      button.textContent = 'Reconnect';
+      status.textContent = 'Checking saved Lollipop session…';
+      const result = await hb.request('/account/status', { email, debug: config.debug === true });
+      if (result?.authenticated) {
+        status.textContent = result.sessionCached
+          ? 'Saved session for ' + email + ' (offline verification).'
+          : 'Signed in as ' + email + '.';
+      } else {
+        status.textContent = 'Sign in required for ' + email + '.';
+        button.textContent = 'Sign in';
+      }
+    } catch (error) {
+      const code = error?.error?.code || error?.code;
+      if (code === 'SIGN_IN_REQUIRED' || code === 'INVALID_SESSION' || code === 'INVALID_CREDENTIALS') {
+        status.textContent = 'Session missing or expired. Sign in again.';
+        button.textContent = 'Sign in';
+      } else if (code === 'NETWORK_ERROR' || code === 'SERVICE_UNAVAILABLE' || code === 'RATE_LIMITED') {
+        status.textContent = 'Unable to verify the saved session right now.';
+      } else {
+        status.textContent = 'Unable to check account status.';
+      }
+    }
+  }
   hb.showSchemaForm();
+  refreshAccountStatus();
 })();

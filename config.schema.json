@@ -2,91 +2,242 @@
   "pluginAlias": "Lollipop",
   "pluginType": "platform",
   "singular": true,
+  "customUi": true,
   "schema": {
-    "lollipops": {
-      "type": "array",
-      "items": {
+    "type": "object",
+    "properties": {
+      "debug": {
+        "title": "Debug",
+        "type": "boolean",
+        "description": "Enable before sign-in for setup diagnostics. Save and restart the child bridge for camera logging. Turn off after testing.",
+        "default": false
+      },
+      "account": {
+        "title": "Lollipop account",
         "type": "object",
+        "description": "Use Sign in / reconnect above, then Save.",
         "properties": {
-          "name": {
-            "title": "Name",
+          "email": {
+            "title": "Email address",
             "type": "string",
-            "placeholder": "Lollipop",
-            "required": true
+            "format": "email"
           },
-          "ip": {
-            "title": "IP Address",
+          "password": {
+            "title": "Password (headless setup only)",
             "type": "string",
-            "placeholder": "0.0.0.0",
-            "description": "You should make sure you have set a DHCP reservation so this IP address doesn't change.",
-            "required": true
+            "description": "Saved in config.json. Interactive sign-in avoids storing it and supports email codes.",
+            "format": "password"
           },
-          "unbridge": {
-            "title": "Configure camera as an unbridged accessory",
-            "description": "This is recommended if you aren't running the plugin as a child bridge and you don't have HKSV enabled.",
-            "type": "boolean"
-          },
-          "hksv" : {
-            "title": "Enable HomeKit Secure Video Recording",
+          "sessionToken": {
+            "title": "Session token (headless setup only)",
+            "type": "string",
+            "description": "Saved in config.json. Leave empty with interactive sign-in.",
+            "format": "password"
+          }
+        }
+      },
+      "cameraDefaults": {
+        "title": "Account camera preferences",
+        "type": "object",
+        "description": "Defaults for automatically discovered cameras.",
+        "properties": {
+          "audio": {
+            "title": "Camera audio",
             "type": "boolean",
-            "description": "This will add an additional Motion Sensor to the camera that is triggered any time any of the other enabled sensors are triggered. This is what HomeKit will use to record events, so long as you have a home hub and supported iCloud plan. Additionally, this enables a prebuffer to greatly increases responsiveness.",
+            "description": "Listen to the camera microphone.",
             "default": true
           },
           "enableSoundMachine": {
-            "title": "Expose a switch in HomeKit to play/pause the built in sound machine.",
+            "title": "Music switch",
             "type": "boolean",
+            "description": "Play or pause the sound selected in the Lollipop app. Requires MQTT.",
             "default": true
           },
+          "unbridge": {
+            "title": "Pair camera separately",
+            "type": "boolean",
+            "description": "Publish as an external accessory. Leave off to keep cameras on the child bridge."
+          },
           "contactSensors": {
-            "title": "Configure the sensors as Contact Sensors rather than Motion Sensors.",
-            "type": "boolean"
+            "title": "Use contact sensors",
+            "type": "boolean",
+            "description": "Present events as contact sensors instead of motion sensors."
           },
           "movementSensitivity": {
-            "title": "Movement Sensitivity Level",
-            "description": "Select the level of movement sensitivity to trigger the movement sensor attached to the HomeKit camera.",
+            "title": "Movement sensitivity",
             "type": "integer",
             "oneOf": [
+              {
+                "enum": [
+                  0
+                ],
+                "title": "Disabled"
+              },
+              {
+                "enum": [
+                  10
+                ],
+                "title": "Low"
+              },
+              {
+                "enum": [
+                  5
+                ],
+                "title": "Medium"
+              },
+              {
+                "enum": [
+                  2
+                ],
+                "title": "High"
+              }
+            ],
+            "default": 10
+          },
+          "enableCryingDetectionSensor": {
+            "title": "Crying sensor",
+            "type": "boolean",
+            "description": "Configure crying detection in the Lollipop app."
+          },
+          "enableCrossingDetectionSensor": {
+            "title": "Crossing sensor",
+            "type": "boolean",
+            "description": "Configure barrier crossing in the Lollipop app."
+          },
+          "enableNoiseSensor": {
+            "title": "Noise sensor",
+            "type": "boolean",
+            "description": "Configure noise alerts in the Lollipop app."
+          }
+        }
+      },
+      "lollipops": {
+        "title": "Camera overrides or manual cameras",
+        "type": "array",
+        "description": "Optional account overrides; without an account, enter manual cameras here.",
+        "default": [],
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "title": "HomeKit name",
+              "type": "string",
+              "description": "Can also select a matching account camera.",
+              "minLength": 1,
+              "placeholder": "Lollipop"
+            },
+            "accountCameraName": {
+              "title": "Camera name in Lollipop app",
+              "type": "string",
+              "description": "Optional selector for an account-camera override."
+            },
+            "enabled": {
+              "title": "Enable this camera",
+              "type": "boolean",
+              "description": "Turn off to exclude the selected account camera.",
+              "default": true
+            },
+            "cameraId": {
+              "title": "Camera ID (pairing ID)",
+              "type": "string",
+              "description": "Optional account selector; required with IP for manual video. Not the hardware serial or hashed path.",
+              "format": "password"
+            },
+            "rtspUsername": {
+              "title": "RTSP username",
+              "type": "string",
+              "description": "Used with a camera ID, not with a complete RTSP URL.",
+              "default": "homebridge"
+            },
+            "rtspUrl": {
+              "title": "Authenticated RTSP URL",
+              "type": "string",
+              "description": "Optional complete URL. Manual video-only mode has no MQTT controls or sensors.",
+              "format": "password"
+            },
+            "ip": {
+              "title": "Camera IP or hostname",
+              "type": "string",
+              "description": "Manual setup only. No port or path; automatic account setup supplies the address.",
+              "placeholder": "0.0.0.0"
+            },
+            "audio": {
+              "title": "Camera audio",
+              "type": "boolean",
+              "description": "Listen to the camera microphone.",
+              "default": true
+            },
+            "enableSoundMachine": {
+              "title": "Music switch",
+              "type": "boolean",
+              "description": "Play or pause the sound selected in the Lollipop app. Requires MQTT.",
+              "default": true
+            },
+            "unbridge": {
+              "title": "Pair camera separately",
+              "type": "boolean",
+              "description": "Publish as an external accessory. Leave off to keep cameras on the child bridge."
+            },
+            "contactSensors": {
+              "title": "Use contact sensors",
+              "type": "boolean",
+              "description": "Present events as contact sensors instead of motion sensors."
+            },
+            "movementSensitivity": {
+              "title": "Movement sensitivity",
+              "type": "integer",
+              "oneOf": [
                 {
-                  "enum": [0],
+                  "enum": [
+                    0
+                  ],
                   "title": "Disabled"
                 },
                 {
-                  "enum": [10],
+                  "enum": [
+                    10
+                  ],
                   "title": "Low"
                 },
                 {
-                  "enum": [5],
+                  "enum": [
+                    5
+                  ],
                   "title": "Medium"
                 },
                 {
-                  "enum": [2],
+                  "enum": [
+                    2
+                  ],
                   "title": "High"
                 }
               ],
-            "default": 10,
-            "required": true
-          },
-          "enableCryingDetectionSensor": {
-            "title": "Expose a sensor for crying detection notifications.",
-            "description": "Crying Detection must be configured in the Lollipop app for this to trigger.",
-            "type": "boolean"
-          },
-          "enableCrossingDetectionSensor": {
-            "title": "Expose a sensor for barrier crossing detection notifications",
-            "description": "Crossing Detection must be configured in the Lollipop app for this to trigger.",
-            "type": "boolean"
-          },
-          "enableNoiseSensor": {
-            "title": "Expose a sensor for unacceptable noise detection notifications.",
-            "description": "Noise must be configured in the Lollipop app for this to trigger.",
-            "type": "boolean"
+              "default": 10
+            },
+            "enableCryingDetectionSensor": {
+              "title": "Crying sensor",
+              "type": "boolean",
+              "description": "Configure crying detection in the Lollipop app."
+            },
+            "enableCrossingDetectionSensor": {
+              "title": "Crossing sensor",
+              "type": "boolean",
+              "description": "Configure barrier crossing in the Lollipop app."
+            },
+            "enableNoiseSensor": {
+              "title": "Noise sensor",
+              "type": "boolean",
+              "description": "Configure noise alerts in the Lollipop app."
+            },
+            "hksv": {
+              "title": "Legacy experimental HKSV",
+              "type": "boolean",
+              "description": "Unavailable in account and authenticated manual video modes.",
+              "default": false
+            }
           }
         }
       }
-    },
-    "debug": {
-      "title": "Enable debug logging",
-      "type": "boolean"
     }
   }
 }
